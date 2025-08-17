@@ -5,9 +5,13 @@ generator client {
   provider = "prisma-client-js"
 }
 
+//SupabaseのデータベースはPostgreSQLになるので、Prismaの設定もあわせて変える
 datasource db {
-  provider = "sqlite"
+  //providerを"postgresql"に書き換える
+  provider = "postgresql"
   url = env("DATABASE_URL")
+  //directURLを追加する
+  directUrl = env("DIRECT_URL")
 }
 
 // ブログ記事テーブル
