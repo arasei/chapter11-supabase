@@ -6,8 +6,11 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  //providerを"postgresql"に書き換える
+  provider = "postgresql"
   url = env("DATABASE_URL")
+  //directURLを追加する
+  directUrl = env("DIRECT_URL")
 }
 
 // ブログ記事テーブル
