@@ -5,8 +5,14 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/utils/supabase';
 
 //全体の概要
+//UIやガードは useSupabaseSessionを使う
+//トークンを管理・供給
 //Supabaseの認証状態を初回取得しつつ変更も購読して常に最新のsessionとJWT（access_token）を保持し、
 //あわせて判定中フラグisLoadingを返すカスタムフック
+
+//主な用途: ヘッダーのログイン表示、ガード、API用トークンの供給、UIのローディング分岐。
+//このusseSupabaseSession.tsで「いまログインしてる？トークンは？」をどこからでも参照可能。
+
 
 //認証状態を「判定中（undefined）／未ログイン（null）／ログイン済み（Session）」の三値で扱うための型定義
 type SessionState =
