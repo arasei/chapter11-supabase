@@ -12,6 +12,10 @@ import { useSupabaseSession } from "@/app/_hooks/useSupabaseSession";
 //現在のURLに応じて「記事一覧」または「カテゴリー一覧」メニューにハイライトを付け、
 //指定された子コンポーネント（children）をメインエリアに表示する。
 
+//useApi は API を叩く各ページで使用（一覧/作成/編集など）。
+//layout / AdminShell は API を叩かないので不要
+////useRouteGuard() と useSupabaseSession() を使って認証制御。
+
 
 // ネストURLでもハイライトできるように
 const normalize = (p: string) => (p.replace(/\/+$/, '') || '/');
@@ -26,14 +30,16 @@ const isActive = (base: string, current: string) => {
 //管理画面のレイアウトコンポーネントを定義
 //children はこのレイアウトの中に表示したいコンテンツ
 export default function AdminShell({ children }: { children: React.ReactNode}) {
-  useRouteGuard();//ガードはClientコンポーネントで呼ぶ
+  //ここでルートガードを実行(Clientなので可能)
+  //ガードはClientコンポーネントで呼ぶ
+  useRouteGuard();
 
-  const { session } = useSupabaseSession();
+  const { session, isLoading } = useSupabaseSession();
   const pathname = usePathname();//現在のパス（例: /admin/categories）を取得してリンクのハイライトに使う。
 
   //children=「このレイアウト内に表示したいページの中身」
   //判定中はチラつき防止
-  if (session === undefined) {
+  if (isLoading) {
     return (
       <div className="flex min-h-screen">
         <aside className="flex min-h-screen"/>
@@ -44,7 +50,7 @@ export default function AdminShell({ children }: { children: React.ReactNode}) {
 
 
   //未ログインはuseRouteGuardが /loginに遷移中なので描画しない
-  if (session === null) return null;
+  if (!session) return null;
 
   return (
     <div className="flex min-h-screen">

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useApi } from '@/app/_hooks/useApi';
 
 //全体の概要
 //管理者専用のカテゴリー一覧ページを実装し、APIから取得したカテゴリーを一覧表示し、
@@ -13,20 +14,44 @@ type Category = {
 };
 //カテゴリー一覧ページ
 const AdminCategoriesPage: React.FC = () => {
+  const { apiFetch } = useApi();///api/admin 配下はトークン自動付与
   const [categories, setCategories] = useState<Category[]>([]);//Category型の配列でstateを管理する、初期値は空配列
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+
   //初回レンダリング時にtokenの値が取得された時(ログイン完了など)fetchCategoriesが実行されAPIからカテゴリー一覧を取得
   useEffect(() => {
-    const fetchCategories = async () => {
+    const ac = new AbortController();
+
+    (async () => {
       try {
-        const res = await fetch("/api/admin/categories");// /api/admin/categoriesにGETリクエストを送信し、カテゴリー一覧データを取得
+        setLoading(true);
+        setErrorMsg(null);
+
+        const res = await apiFetch('/api/admin/categories', { signal: ac.signal });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`取得に失敗しました（${res.status}）${text ? `: ${text}` : ''}`);
+        }
+
         const data = await res.json();
-        setCategories(data.categories);//データが取得されたらsetCategories(data.categories)で更新
-      } catch (error) {
-        console.error("カテゴリー取得エラー", error);
+        setCategories(Array.isArray(data.categories) ? data.categories : []);
+      } catch (e: any) {
+        if (e.name === 'AbortError') return;
+        console.error('カテゴリー取得エラー:', e);
+        setErrorMsg(e?.message ?? 'カテゴリーの取得に失敗しました');
+        setCategories([]);
+      } finally {
+        setLoading(false);
       }
-    };
-    fetchCategories();
-  }, []);//依存配列が空なので初回レンダリング時のみ実行
+    })();
+
+    return () => ac.abort();
+  }, [apiFetch]);
+
+  if (loading) return <div className="p-4">読み込み中…</div>;
+
 
   return (
     <div className="space-y-4 p-4">
@@ -39,9 +64,12 @@ const AdminCategoriesPage: React.FC = () => {
           新規作成
         </Link>
       </div>
+
+      {errorMsg && <p className="text-red-600">{errorMsg}</p>}
+
       {/* カテゴリーが1件以上ある場合の表示 */}
       <div>
-        {Array.isArray(categories) && categories.length > 0 ? (
+        {categories.length > 0 ? (
           //カテゴリー一覧配列をmapで1件ずつ繰り返し処理
           categories.map((category) => (
             //各カテゴリー名を表示し、クリックするとそのカテゴリー編集ページ(/admin/categories/{id})へ遷移するリンク

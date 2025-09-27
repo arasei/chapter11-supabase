@@ -1,11 +1,14 @@
 "use client";
 
+
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useApi } from "@/app/_hooks/useApi";
 
 //全体の概要
 // このコンポーネントは、Supabase の認証トークンを使ってログイン中の管理者だけがアクセスできる記事一覧ページを表示し、
 // 記事ごとにリンク付きで詳細ページに飛べるようにする管理画面機能です。
+//このページは、「未ログイン状態で叩くと apiFetch が例外→エラーメッセージ表示」になる。
 
 type Category = {
   id: number;
@@ -23,25 +26,47 @@ type Post = {
 
 //記事一覧ページ
 const AdminPostPage: React.FC = () => {
+  const { apiFetch } = useApi();// /api/admin 配下はJWT自動付与
   const [posts, setPosts] = useState<Post[]>([]);//初期値は空配列に。空配列なら.map()が正常に動作し何も表示されないだけで済むため安全。
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  
+
   useEffect(() => {
-    const fetchPosts = async () => {
+    const ac = new AbortController();
+
+    (async () => {
       try {
-        const res = await fetch("/api/admin/posts");//fetch 関数で /api/admin/posts というエンドポイントに GET リクエストを送信。
+        setLoading(true);
+        setErrorMsg(null);
+
+        const res = await apiFetch("/api/admin/posts", { signal: ac.signal });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          if (res.status === 401) throw new Error("未ログインです（401）。");
+          if (res.status === 403) throw new Error("アクセス権限がありません（403）。");
+          throw new Error(`取得に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
+        }
+
         const data = await res.json();
-        console.log("APIレスポンス:", data);//デバック用の出力
-        //data.posts が配列かどうかを Array.isArray() で確認。
-        //配列であればそのまま posts にセット。
-        //配列でなければ、空配列 [] をセットして安全に処理を継続。
-        //安全対策：API が不正な形式でも .map() でエラーを起こさないようにしている。
+        // 不正形式でも安全に
         setPosts(Array.isArray(data.posts) ? data.posts : []);
-      } catch (error) {
-        console.error("記事取得エラー", error);
-        setPosts([]);//念の為catchでもposts を空配列にして、表示側で .map() してもエラーにならないようにする。
+      } catch (e: any) {
+        if (e.name === "AbortError") return;
+        console.error("記事取得エラー:", e);
+        setErrorMsg(e?.message ?? "記事取得でエラーが発生しました。");
+        setPosts([]);
+      } finally {
+        setLoading(false);
       }
-    };
-    fetchPosts();
-  }, []);
+    })();
+
+    return () => ac.abort();
+  }, [apiFetch]);
+
+  if (loading) {
+    return <div className="p-4">読み込み中...</div>
+  }
 
 
   return (
@@ -55,9 +80,12 @@ const AdminPostPage: React.FC = () => {
           新規作成
         </Link>
       </div>
+
+      {errorMsg && <p className="text-red-600">{errorMsg}</p>}
+
       <div>
         {/*記事が1件以上ある場合の表示*/}
-        {Array.isArray(posts) && posts.length > 0 ?(
+        {posts.length > 0 ?(
           posts.map((post) => (
             //各記事を順番に表示
             <div key={post.id}>
@@ -65,7 +93,7 @@ const AdminPostPage: React.FC = () => {
                 <h2 className="font-black">{post.title}</h2>
               </Link>
               <p>
-                {new Date(post.createdAt).toLocaleDateString()}
+                {new Date(post.createdAt).toLocaleDateString("ja-JP")}
               </p>
             </div>
           ))

@@ -4,15 +4,18 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PostForm } from "../_components/PostForm";//共通フォームコンポーネントをインポート。新規作成・編集で再利用。
 import { CreatePost } from "@/app/_types/Post";//投稿データの型定義(CreatePost)をインポート。型安全にデータを扱うため。
+import { useApi } from "@/app/_hooks/useApi";
 
 //管理者が新規記事を作成するページで、フォーム入力内容をAPI経由で送信し、
 //投稿完了後に記事一覧ページへ遷移するコンポーネント
 
 const NewPostPage = () => {
   const router = useRouter();
+  const { apiFetch } = useApi(); // ← /api/admin 配下はJWT自動付与
   const [isSubmitting, setIsSubmitting] = useState(false);//送信中状態を管理
 
   // 新規作成時の送信処理
+  // 新規作成(API: POST /api/admin/posts)
   //投稿データ送信処理(POSTリクエスト)関数。
   //PostFormから渡ってくるデータを受け取る。
   const handleCreate = async (data: CreatePost) => {
@@ -23,21 +26,24 @@ const NewPostPage = () => {
     try {
       //APIエンドポイントにPOSTリクエスト送信。
       // 投稿データをバックエンドに送る。
-      const res = await fetch("/api/admin/posts", {
+      const res = await apiFetch("/api/admin/posts", {
         //POSTメソッドでJSON形式のデータ送信を指定。
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
 
-      if (!res.ok) throw new Error("投稿に失敗しました");
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`投稿に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
+      }
 
       alert("投稿が完了しました");
       //投稿完了後に記事一覧ページへリダイレクト。
       router.push("/admin/posts");
-    } catch (error) {
+    } catch (error:any) {
       console.error(error);
-      alert("投稿に失敗しました");
+      alert(error?.message ?? "投稿に失敗しました");
     } finally {
       setIsSubmitting(false);//送信完了→ボタン復活
     }

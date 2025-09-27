@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { CreatePost, Category } from "@/app/_types/Post";
+import { useApi } from "@/app/_hooks/useApi";
 
 //全体の概要
 //記事のタイトル・本文・サムネイルURL・カテゴリーを入力でき、
+// /api/admin/categories への取得は useApi で JWT を自動付与して実行。
 //送信中は全ての入力やボタンを操作不能にする投稿フォームコンポーネント
 
 //PostFormが受け取るpropsの型定義
@@ -15,8 +17,8 @@ export type PostFormProps = {
   onSubmit: (data: CreatePost) => Promise<void>;
   onDelete?: () => void;//削除ボタン押下時の関数(省略可)
   submitLabel: string;//ボタンのラベル文字列
-  isSubmitting?: boolean;
-  disabled?: boolean;
+  isSubmitting?: boolean;//親から送信中フラグを渡せる(任意)
+  disabled?: boolean;//親から強制無効化(任意)
 };
 
 //PostFormコンポーネント本体。propsを分割代入で受け取る。
@@ -25,6 +27,8 @@ export const PostForm: React.FC<PostFormProps> = ({
   onSubmit,
   onDelete,
   submitLabel,
+  isSubmitting: isSubmittingProp,
+  disabled: disabledProp,
 }) => {
   //入力値と状態管理
   //各フォームフィールドのstateを初期データ(initialData)からセット。
@@ -36,34 +40,61 @@ export const PostForm: React.FC<PostFormProps> = ({
   const [selectedCategories, setSelectedCategories] = useState<number[]>(
     initialData.categories.map((c) => c.id)
   );
+
+
   //全カテゴリー一覧を保持するstate
+
+  //カテゴリー取得(管理API→JWT付与)
+  const { apiFetch } = useApi();
   //APIから取得したカテゴリー一覧を格納
   const [allCategories, setAllCategories] = useState<Category[]>([]);
+  const [catLoading, setCatLoading] = useState(true);
+  const [catError, setCatError] = useState<string | null>(null);
 
   //投稿中フラグ。これがtrueになると全UIがdisabledになる。
-  const [isSubmitting, setIsSubmitting] = useState(false);//投稿中かどうか
+  // 送信中（内部管理）※親からもらった isSubmitting があればそれを優先
+  const [isSubmittingLocal, setIsSubmittingLocal] = useState(false);//投稿中かどうか
+  const isSubmitting = isSubmittingProp ?? isSubmittingLocal;
+
+  // 実効的な disabled（取得中/送信中/親からの強制）
+  const disabled = useMemo(
+    () => !!disabledProp || isSubmitting || catLoading,
+    [disabledProp, isSubmitting, catLoading]
+  );
 
   // カテゴリー一覧をAPIから取得（初回のみ）
   //初回レンダリング時にカテゴリー一覧をAPIから取得しstateにセット。
   useEffect(() => {
-    const fetchCategories = async () => {
+    const ac = new AbortController();
+    (async () => {
       try {
-        const res = await fetch("/api/admin/categories");
+        setCatLoading(true);
+        setCatError(null);
+        const res = await apiFetch("/api/admin/categories", { signal: ac.signal });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(`カテゴリー取得に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
+        }
         const data = await res.json();
-        setAllCategories(data.categories);
-      } catch (error) {
-        console.error("カテゴリー取得エラー", error);
+        setAllCategories(Array.isArray(data.categories) ? data.categories : []);
+      } catch (e: any) {
+        if (e.name === "AbortError") return;
+        console.error("カテゴリー取得エラー:", e);
+        setCatError(e?.message ?? "カテゴリーの取得に失敗しました");
+        setAllCategories([]);
+      } finally {
+        setCatLoading(false);
       }
-    };
-    fetchCategories();
-  }, []);//空配列[]を渡しているのでマウント時1回だけ実行
+    })();
+    return () => ac.abort();
+  }, [apiFetch]);
 
 
+  //カテゴリー選択変更
   //handleChangeCategoryは<select multiple>の選択が変わった時に呼ばれる
   //複数選択の<select>から選択されたoptionのvalueを数値配列として取得
   const handleChangeCategory = (e:React.ChangeEvent<HTMLSelectElement>) => {
-    const selectedOptions = e.target.selectedOptions;
-    if (!selectedOptions) {
+    if (!e.target.selectedOptions) {
       setSelectedCategories([]);
       return;
     }
@@ -74,6 +105,7 @@ export const PostForm: React.FC<PostFormProps> = ({
     setSelectedCategories(selected);//選択状態のカテゴリーIDをReactのstateに保存
   };
 
+  //送信
   //フォーム送信時に実行される関数。
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,8 +114,10 @@ export const PostForm: React.FC<PostFormProps> = ({
       alert("カテゴリーを選択してください。");
       return;
     }
+    if (isSubmitting) return;//二重送信防止(親から来たフラグも考慮)
+
     //isSubmittingをtrueにしてUIをロック。
-    setIsSubmitting(true);//投稿中に切り替え
+    setIsSubmittingLocal(true);//投稿中に切り替え
     try {
       //onSubmitはpropsで渡された非同期関数を実行。
       await onSubmit({
@@ -93,7 +127,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         categories: selectedCategories.map((id) => ({ id }))
       });
     } finally {
-      setIsSubmitting(false);//投稿終了後に解除
+      setIsSubmittingLocal(false);//投稿終了後に解除
     }
   };
 
@@ -101,6 +135,9 @@ export const PostForm: React.FC<PostFormProps> = ({
     //フォーム全体の開始タグ。送信時にhandleSubmitが呼ばれる。
     <form onSubmit={handleSubmit} className="space-y-4 p-4">
       <h1 className="text-lg font-bold mb-4">記事フォーム</h1>
+
+      {catError && <p className="text-red-600">{catError}</p>}
+      {catLoading && <p>カテゴリーを読み込み中…</p>}
 
       {/*以下フォーム項目は共通パターンです*/}
       {/*ラベルと入力欄*/}
@@ -111,7 +148,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         className="border border-stone-300 rounded-lg p-3 w-full"
-        disabled={isSubmitting}
+        disabled={disabled}
       />
 
       <label>内容</label>
@@ -119,7 +156,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         value={content}
         onChange={(e) => setContent(e.target.value)}
         className="border border-stone-300 rounded-lg p-3 w-full"
-        disabled={isSubmitting}
+        disabled={disabled}
       />
 
       <label>サムネイルURL</label>
@@ -128,7 +165,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         value={thumbnailUrl}
         onChange={(e) => setThumbnailUrl(e.target.value)}
         className="border border-stone-300 rounded-lg p-3 w-full"
-        disabled={isSubmitting}
+        disabled={disabled}
       />
 
       {/*カテゴリー選択欄。取得したallCategoriesを順番に表示*/}
@@ -140,7 +177,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         value={selectedCategories.map(String)} //valueはstring[]で渡す。
         onChange={handleChangeCategory}
         className="border border-stone-300 rounded-lg p-3 w-full"
-        disabled={isSubmitting}//投稿中は選択できない
+        disabled={disabled}//投稿中は選択できない
       >
         {allCategories.map((category) => (
           <option key={category.id} value={category.id}>
@@ -154,7 +191,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         <button
           type="submit"
           className="py-2 px-4 rounded-lg text-white bg-blue-700"
-          disabled={isSubmitting}//投稿中は押せない
+          disabled={disabled}//投稿中は押せない
         >
           {isSubmitting ? "送信中..." : submitLabel}
         </button>
@@ -165,7 +202,7 @@ export const PostForm: React.FC<PostFormProps> = ({
             type="button"
             onClick={onDelete}
             className="py-2 px-4 rounded-lg text-white bg-red-600"
-            disabled={isSubmitting}//投稿中は削除もできない
+            disabled={disabled}//投稿中は削除もできない
           >
             削除
           </button>
