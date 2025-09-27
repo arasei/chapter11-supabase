@@ -1,0 +1,14 @@
+共通APIフック useApi 導入：/api/admin/** へのリクエスト時に JWT（Authorization: Bearer）を自動付与。重複実装と付け忘れを解消。
+
+fetch を apiFetch に統一：投稿・カテゴリの 一覧/作成/更新/削除（GET/POST/PUT/DELETE）すべてで自動認証化。
+
+読み込み・中断対応：loading/errorMsg の状態管理を追加し、AbortController でアンマウント時に 通信を中断。
+
+フォームの堅牢化：
+・PostForm で カテゴリ取得も useApi 経　　由に変更（JWT付与）。
+
+・取得中/送信中/親の disabled をまとめた 一括無効化制御。
+
+・二重送信防止、（提案）initialData 変化時の再反映。
+
+ガードとレイアウトの責務分離：layout.tsx は Server Component の枠のみに専念、ガードは Client の AdminShell 側で実行して Router 未マウント問題を回避。
