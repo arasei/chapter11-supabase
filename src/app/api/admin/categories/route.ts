@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client'
 import { NextRequest, NextResponse } from 'next/server'
+import { requireUser /*, assertRole */ } from '@/app/api/_lib/auth'
 
 const prisma = new PrismaClient()
 
@@ -9,7 +10,14 @@ const prisma = new PrismaClient()
 // 管理画面で使うカテゴリー一覧の取得（GET）と新規作成（POST）を処理するAPI
 
 //管理者　カテゴリー一覧取得API
-export const GET = async (request: NextRequest) => {
+export const GET = async (req: NextRequest) => {
+  // ★ 認証ガード（直書き）
+  const auth = await requireUser(req)
+  if ('error' in auth) return NextResponse.json(auth, { status: auth.status })
+  // 必要ならロール制御
+  // const gate = assertRole(auth.user, 'admin')
+  // if ('error' in gate) return NextResponse.json(gate, { status: gate.status })
+
   try {
     // カテゴリーの一覧をDBから取得
     //PrismaORMを使ってcategoryテーブルのデータを全件取得。
@@ -34,37 +42,42 @@ interface CreateCategoryRequestBody {
 }
 
 //管理者　カテゴリー新規作成API
-export const POST = async (request: Request, context: any) => {
+export const POST = async (req: NextRequest) => {
+  // ★ 認証ガード（直書き）
+  const auth = await requireUser(req)
+  if ('error' in auth) return NextResponse.json(auth, { status: auth.status })
+  // const gate = assertRole(auth.user, 'admin')
+  // if ('error' in gate) return NextResponse.json(gate, { status: gate.status })
+
   try {
     //フロントエンドから送られてくるリクエストのbody(name)をJSONとして取得
-    const body = await request.json()
+    const body = await req.json()
 
     // bodyの中からnameを取り出す
     const { name }: CreateCategoryRequestBody = body
+    if (!name || !name.trim()) {
+      return NextResponse.json({ status: 'name is required' }, { status: 400 })
+    }
 
     //Prismaのcreate()メソッドで新しいカテゴリーをデータベースに追加。
     const data = await prisma.category.create({
       data: {
-        name,
+        name: name.trim()
       },
     })
 
     //作成されたカテゴリーのidを含むJSONレスポンスを返す
-    return NextResponse.json({
-      status: 'OK',
-      message: '作成しました',
-      id: data.id,
-    })
+    return NextResponse.json(
+      {
+        status: 'OK',
+        message: '作成しました',
+        id: data.id,
+      },
+      { status: 201 }
+    )
   } catch (error) {
     if (error instanceof Error) {
       return NextResponse.json({ status: error.message }, { status: 400 })
     }
   }
 }
-
-
-//改善点・補足
-//問題・懸念	改善案・補足内容
-//PrismaClient を毎回生成	lib/prisma.ts 等でグローバルに使い回すとベター（開発時の接続数オーバー対策）
-//POST のバリデーションがない	空文字や長さ制限のチェックを zod や Yup で行うと安全
-//context 未使用	不要なら削除してOK（POST = async (request) で十分）

@@ -20,6 +20,7 @@ const supabase = createClient(
 );
 
 //どんなリクエストでも「headers を持っていれば OK」にする（Request/NextRequest両対応）
+//type ReqLike = { headers: Headers } によって Request / NextRequest どちらでもそのまま渡せる（as any 不要）。
 type ReqLike = { headers: Headers };
 
 //Authorization: Bearer <token> を取り出す

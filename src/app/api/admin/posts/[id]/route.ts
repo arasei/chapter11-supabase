@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { requireUser /*, assertRole */ } from "@/app/api/_lib/auth";
 //自作の型定義をimport。
 //UpdatePostRequestBody: PUT のボディ型（title/content/thumbnailUrl/categories）。
 //GetPostResponse/PutPostResponse/DeletePostResponse: 各メソッドのレスポンス型。
@@ -55,11 +56,19 @@ const toPostDTO = (row: PostWithCategories): PostDTO => ({
 
 
 // 管理者　個別記事取得API(GET)
+// ---- GET /api/admin/posts/:id ----
 //指定した記事IDに該当する記事＋カテゴリーを取得
 export const GET = async (
-  _: NextRequest,//第１引数は使わないので「 _ 」に。
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) => {
+  // ★ 認証ガード
+  const auth = await requireUser(req);
+  if ("error" in auth) return NextResponse.json(auth, { status: auth.status });
+  // 任意のロール制御
+  // const gate = assertRole(auth.user, "admin");
+  // if ("error" in gate) return NextResponse.json(gate, { status: gate.status });
+
   //URLのidを数値化&妥当性チェック。
   const postId = Number(params.id);
   if (!Number.isInteger(postId)) {
@@ -82,10 +91,7 @@ export const GET = async (
           include: {
             category: {
               //selectにより必要なフィールドだけを取得(効率的に行うため)
-              select: {
-                id: true,
-                name: true,
-              },
+              select: { id: true, name: true },
             },
           },
         },
@@ -97,15 +103,12 @@ export const GET = async (
       { status: "OK", post: post ? toPostDTO(post as PostWithCategories) : null },
       { status: 200 }
     );
-  } catch (error) {
+  } catch (error: unknown) {
     //例外発生時は、400とエラーメッセージを返す。
-    if (error instanceof Error) {
-      //失敗時
-      return NextResponse.json<ApiError>(
-        { status: error.message },
-        { status: 400 }
-      );
-    }
+    const message = error instanceof Error ? error.message : "Unexpected error";
+    //失敗時
+    return NextResponse.json<ApiError>({ status: message }, { status: 400 });
+
   }
 };
 
@@ -114,12 +117,20 @@ export const GET = async (
 
 // PUTという命名にすることで、PUTリクエストの時にこの関数が呼ばれる
 //管理者　記事更新API
+// ---- PUT /api/admin/posts/:id ----
 //更新時に送られるリクエストボディの型定義
 //記事の内容を更新し、カテゴリー関連も更新
 export const PUT = async (
-  request: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } } // ここでリクエストパラメータを受け取る
 ) => {
+  // ★ 認証ガード
+  const auth = await requireUser(req);
+  if ("error" in auth) return NextResponse.json(auth, { status: auth.status });
+  // const gate = assertRole(auth.user, "admin");
+  // if ("error" in gate) return NextResponse.json(gate, { status: gate.status });
+
+
   //idの安全な数値化
   //idの妥当性チェック
   const postId = Number(params.id);
@@ -130,21 +141,15 @@ export const PUT = async (
   //Post.ts からimportした型でボディを受け取る
   //ボディをパースして型付け（title/content/thumbnailUrl と、categories: {id:number}[]）。
   const { title, content, categories, thumbnailUrl }: UpdatePostRequestBody =
-    await request.json();
+    await req.json();
 
   try {
     // idを指定して、Postを更新
     //title, content, thumbnailUrlを更新
     //post.updateで記事本体の更新(この戻り値は使わない方針)
     await prisma.post.update({
-      where: {
-        id: postId
-      },
-      data: {
-        title,
-        content,
-        thumbnailUrl,
-      },
+      where: { id: postId },
+      data: { title, content, thumbnailUrl },
     });
 
     // 一旦、記事と関連するカテゴリーの中間テーブルのレコードを全て削除
@@ -160,10 +165,7 @@ export const PUT = async (
     //for...of＋postCategory.createで中間テーブルの再構築
     for (const category of categories) {
       await prisma.postCategory.create({
-        data: {
-          postId,
-          categoryId: category.id,
-        },
+        data: { postId, categoryId: category.id },
       });
     }
 
@@ -171,7 +173,9 @@ export const PUT = async (
     const finalRow = await prisma.post.findUnique({
       where: { id: postId },
       include: {
-        postCategories: { include: { category: { select: { id: true, name: true } } } },
+        postCategories: { 
+          include: { category: { select: { id: true, name: true } } } 
+        },
       },
     });
     if (!finalRow) {
@@ -180,11 +184,21 @@ export const PUT = async (
 
     // レスポンスを返す
     //DTOに変換した最終状態を返す。
-    return NextResponse.json<PutPostResponse>({ status: "OK", post: toPostDTO(finalRow as PostWithCategories) }, { status: 200 });
-  } catch (error) {
+    return NextResponse.json<PutPostResponse>(
+      { status: "OK", post: toPostDTO(finalRow as PostWithCategories) }, 
+      { status: 200 }
+    );
+  } catch (error: unknown) {
     //例外時の共通エラーレスポンス
-    if (error instanceof Error)
+    // Prisma 既知エラーの例：対象なし(P2025) → 404
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === "P2025") {
+        return NextResponse.json<ApiError>({ status: "Not Found" }, { status: 404 });
+      }
       return NextResponse.json<ApiError>({ status: error.message }, { status: 400 });
+    }
+    const message = error instanceof Error ? error.message : "Unexpected error";
+    return NextResponse.json<ApiError>({ status: message }, { status: 500 });
   }
 };
 
@@ -192,8 +206,15 @@ export const PUT = async (
 //DELETEという命名にすることで、DELETEリクエストの時にこの関数が呼ばれる
 //指定IDの記事を削除
 export const DELETE = async (
-  _: NextRequest, { params }: { params: { id: string } }
+  req: NextRequest,
+  { params }: { params: { id: string } }
 ) => {
+  // ★ 認証ガード
+  const auth = await requireUser(req);
+  if ("error" in auth) return NextResponse.json(auth, { status: auth.status });
+  // const gate = assertRole(auth.user, "admin");
+  // if ("error" in gate) return NextResponse.json(gate, { status: gate.status });
+
   //idの妥当性チェック
   const postId = Number(params.id);
   if (!Number.isInteger(postId)) {
@@ -203,16 +224,17 @@ export const DELETE = async (
   try {
     //postテーブルの該当IDのレコードを削除
     //対象記事を削除して、成功レスポンス。
-    await prisma.post.delete({
-      where: {
-        id: postId,
-      }
-    });
+    await prisma.post.delete({ where: { id: postId } });
     return NextResponse.json<DeletePostResponse>({ status: "OK" }, { status: 200 });
-  } catch (error) {
+  } catch (error: unknown) {
     //エラーレスポンス
-    if (error instanceof Error) {
-      return NextResponse.json<ApiError>({ status: error.message }, { status: 400 });
-    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === "P2025") {
+          return NextResponse.json<ApiError>({ status: "Not Found" }, { status: 404 });
+        }
+        return NextResponse.json<ApiError>({ status: error.message }, { status: 400 });
+      }
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      return NextResponse.json<ApiError>({ status: message }, { status: 500 });
   }
 };
