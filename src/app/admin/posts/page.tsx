@@ -4,25 +4,17 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useApi } from "@/app/_hooks/useApi";
+import type { Post } from "@/app/_types/Post";// DTO型を使い回し
+
+
 
 //全体の概要
 // このコンポーネントは、Supabase の認証トークンを使ってログイン中の管理者だけがアクセスできる記事一覧ページを表示し、
 // 記事ごとにリンク付きで詳細ページに飛べるようにする管理画面機能です。
 //このページは、「未ログイン状態で叩くと apiFetch が例外→エラーメッセージ表示」になる。
+//JWT 付与済み apiFetch で /api/admin/posts を取得して一覧表示。
+// 未ログイン/権限なしはエラーメッセージを表示。Abortも安全に処理。
 
-type Category = {
-  id: number;
-  name: string;
-};
-
-type Post = {
-  id: number;
-  title: string;
-  createdAt: string;//作成日時
-  postCategories: {
-    category: Category;
-  }[];
-};
 
 //記事一覧ページ
 const AdminPostPage: React.FC = () => {
@@ -48,13 +40,16 @@ const AdminPostPage: React.FC = () => {
           throw new Error(`取得に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
         }
 
-        const data = await res.json();
+        const data: unknown = await res.json();
         // 不正形式でも安全に
-        setPosts(Array.isArray(data.posts) ? data.posts : []);
-      } catch (e: any) {
-        if (e.name === "AbortError") return;
+        // 安全に配列かを判定してセット
+        const list = (data as { posts?: unknown }).posts;
+        setPosts(Array.isArray(list) ? (list as Post[]) : []);
+      } catch (e: unknown) {
+        // アンマウント時などの中断は無視
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error("記事取得エラー:", e);
-        setErrorMsg(e?.message ?? "記事取得でエラーが発生しました。");
+        setErrorMsg(e instanceof Error ? e.message : "記事取得でエラーが発生しました。");
         setPosts([]);
       } finally {
         setLoading(false);

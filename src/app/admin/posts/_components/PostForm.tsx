@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, type ChangeEvent } from "react";
 import { CreatePost, Category } from "@/app/_types/Post";
 import { useApi } from "@/app/_hooks/useApi";
+import { supabase } from "@/utils/supabase";
+import { v4 as uuidv4 } from "uuid";//固有ID生成ライブラリ
+
+const BUCKET = "post_thumbnail"; // ← あなたのバケット名（private）
 
 //全体の概要
 //記事のタイトル・本文・サムネイルURL・カテゴリーを入力でき、
@@ -34,7 +38,12 @@ export const PostForm: React.FC<PostFormProps> = ({
   //各フォームフィールドのstateを初期データ(initialData)からセット。
   const [title, setTitle] = useState(initialData.title);
   const [content, setContent] = useState(initialData.content);
-  const [thumbnailUrl, setThumbnailUrl] = useState(initialData.thumbnailUrl);
+  //アップロードする画像の「キー」を保持するstate(初期値は既存データを流用)
+  //「キー」を入れる前提
+  const [thumbnailImageKey, setThumbnailImageKey] = useState(initialData.thumbnailImageKey ?? "");
+  // プレビュー用の署名付きURL（private バケットなので createSignedUrl を使う）
+  const [previewUrl, setPreviewUrl] = useState<string>("");
+  //カテゴリー
   //選択されたカテゴリーIDを保持。
   //初期データからidだけを抽出してstate(配列)に保持
   const [selectedCategories, setSelectedCategories] = useState<number[]>(
@@ -51,6 +60,7 @@ export const PostForm: React.FC<PostFormProps> = ({
   const [catLoading, setCatLoading] = useState(true);
   const [catError, setCatError] = useState<string | null>(null);
 
+  //送信中
   //投稿中フラグ。これがtrueになると全UIがdisabledになる。
   // 送信中（内部管理）※親からもらった isSubmitting があればそれを優先
   const [isSubmittingLocal, setIsSubmittingLocal] = useState(false);//投稿中かどうか
@@ -62,6 +72,7 @@ export const PostForm: React.FC<PostFormProps> = ({
     [disabledProp, isSubmitting, catLoading]
   );
 
+  //カテゴリー一覧取得
   // カテゴリー一覧をAPIから取得（初回のみ）
   //初回レンダリング時にカテゴリー一覧をAPIから取得しstateにセット。
   useEffect(() => {
@@ -77,10 +88,10 @@ export const PostForm: React.FC<PostFormProps> = ({
         }
         const data = await res.json();
         setAllCategories(Array.isArray(data.categories) ? data.categories : []);
-      } catch (e: any) {
-        if (e.name === "AbortError") return;
+      } catch (e: unknown) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
         console.error("カテゴリー取得エラー:", e);
-        setCatError(e?.message ?? "カテゴリーの取得に失敗しました");
+        setCatError(e instanceof Error ? e.message : "カテゴリーの取得に失敗しました");
         setAllCategories([]);
       } finally {
         setCatLoading(false);
@@ -89,15 +100,62 @@ export const PostForm: React.FC<PostFormProps> = ({
     return () => ac.abort();
   }, [apiFetch]);
 
+  //既存キーがある場合はプレビュー用の署名URLを発行
+  useEffect(() => {
+    (async () => {
+      if (!thumbnailImageKey) {
+        setPreviewUrl("");
+        return;
+      }
+      const { data, error } = await supabase.storage
+        .from(BUCKET)
+        .createSignedUrl(thumbnailImageKey, 60 * 60); // 1時間有効
+      if (error) {
+        console.warn("signed url 生成失敗:", error.message);
+        setPreviewUrl("");
+        return;
+      }
+      setPreviewUrl(data?.signedUrl ?? "");
+    })();
+  }, [thumbnailImageKey]);
+
+  // --- 画像選択＆アップロード（private バケット） ---
+  const handleImageChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    
+
+    // private/xxxx 形式でユニークパスを作成
+    const ext = file.name.split(".").pop() || "jpg";
+    const filePath = `private/${uuidv4()}.${ext}`;
+
+    const { data, error } = await supabase.storage
+      .from(BUCKET)
+      .upload(filePath, file, { cacheControl: "3600", upsert: false });
+
+    if (error) {
+      alert(`アップロードに失敗しました: ${error.message}`);
+      e.target.value = "";
+      return;
+    }
+
+    // ★ 成功 → data.path をキーとして保存
+    setThumbnailImageKey(data.path);
+
+    // プレビュー用に署名URL発行
+    const signed = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(data.path, 60 * 60);
+    setPreviewUrl(signed.data?.signedUrl ?? "");
+  };
+
 
   //カテゴリー選択変更
   //handleChangeCategoryは<select multiple>の選択が変わった時に呼ばれる
   //複数選択の<select>から選択されたoptionのvalueを数値配列として取得
-  const handleChangeCategory = (e:React.ChangeEvent<HTMLSelectElement>) => {
-    if (!e.target.selectedOptions) {
-      setSelectedCategories([]);
-      return;
-    }
+  const handleChangeCategory = (e: ChangeEvent<HTMLSelectElement>) => {
+  
     //target.selectedOptions は、ユーザーが選択した <option> 要素のリスト。
     //Array.from でこの selectedOptions を配列に変換し、option.value を Number に変換して数値の配列にします。
     //選ばれたカテゴリーIDの数値配列を作っている。
@@ -120,10 +178,13 @@ export const PostForm: React.FC<PostFormProps> = ({
     setIsSubmittingLocal(true);//投稿中に切り替え
     try {
       //onSubmitはpropsで渡された非同期関数を実行。
+      // ★ サーバーが「キー」を受け取る想定
+      //    いったん既存 CreatePost のフィールド名が thumbnailUrl のままなら、
+      //    “キーをそのまま thumbnailUrl に詰めて送る” でも動きます。
       await onSubmit({
         title,
         content,
-        thumbnailUrl,
+        thumbnailImageKey,// ← URL ではなく “キー” を送る
         categories: selectedCategories.map((id) => ({ id }))
       });
     } finally {
@@ -159,14 +220,33 @@ export const PostForm: React.FC<PostFormProps> = ({
         disabled={disabled}
       />
 
-      <label>サムネイルURL</label>
+      {/* 画像アップロード（キー保持） */}
+      <label
+        htmlFor="thumbnailImageInput"
+        className="block text-sm font-medium text-gray-700"
+      >
+        サムネイル画像
+      </label>
+      {/*type="file"とすることで、ファイルのアップロードのUIを表示できる。*/}
       <input
-        type="text"
-        value={thumbnailUrl}
-        onChange={(e) => setThumbnailUrl(e.target.value)}
-        className="border border-stone-300 rounded-lg p-3 w-full"
+        type="file"
+        id="thumbnailImageInput"
+        onChange={handleImageChange}
+        accept="image/*"
         disabled={disabled}
       />
+
+      {/* プレビュー（private なので署名URLを使用） */}
+      {previewUrl && (
+        <div className="mt-2">
+          <img
+            src={previewUrl}
+            alt="サムネイルプレビュー"
+            className="h-32 w-32 object-cover rounded border"
+          />
+          <p className="text-xs text-gray-500 break-all">key: {thumbnailImageKey}</p>
+        </div>
+      )}
 
       {/*カテゴリー選択欄。取得したallCategoriesを順番に表示*/}
       {/*選択状態はselectedCategoriesに基づく。*/}

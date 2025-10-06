@@ -30,7 +30,7 @@ const NewPostPage = () => {
         //POSTメソッドでJSON形式のデータ送信を指定。
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify(data),// data.thumbnailImageKey を含む
       });
 
       if (!res.ok) {
@@ -41,9 +41,10 @@ const NewPostPage = () => {
       alert("投稿が完了しました");
       //投稿完了後に記事一覧ページへリダイレクト。
       router.push("/admin/posts");
-    } catch (error:any) {
-      console.error(error);
-      alert(error?.message ?? "投稿に失敗しました");
+    } catch (err: unknown) {
+      console.error(err);
+      const msg = err instanceof Error ? err.message : "投稿に失敗しました";
+      alert(msg);
     } finally {
       setIsSubmitting(false);//送信完了→ボタン復活
     }
@@ -51,10 +52,11 @@ const NewPostPage = () => {
 
   // 新規作成時の初期データ
   //フォームに渡す初期データを宣言。全て空状態で新規作成用
+  // フォーム初期値（thumbnailImageKey を使用）
   const initialData: CreatePost = {
     title: "",
     content: "",
-    thumbnailUrl: "",
+    thumbnailImageKey: "",
     categories: [], // カテゴリーは空配列
   };
 

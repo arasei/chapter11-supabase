@@ -10,12 +10,14 @@ import { useApi } from '@/app/_hooks/useApi';
 //全体の概要
 //管理者が特定の記事の内容を取得し、フォームで編集・削除できるページを実装したコード
 
-type PostRes = { post: Post };
+type PostRes = { post: Post | null };
 
 
 const EditPostPage: React.FC = () => {
   const params = useParams<{ id: string }>();
-  const id = params?.id;//URLから記事のIDを取得。動的ルートのパラメータを扱う
+  //URL の /admin/posts/[id]
+  //URLから記事のIDを取得。動的ルートのパラメータを扱う
+  const id = params?.id;
   const router = useRouter();//ページ遷移を制御するためのルーターオブジェクトを取得。
 
 
@@ -46,16 +48,22 @@ const EditPostPage: React.FC = () => {
         const data: PostRes = await res.json();
         const post = data.post;
 
+        if (!post) {
+          setInitialData(null);
+          setErrorMsg("データが見つかりませんでした。");
+          return;//ここで早期リターン
+        }
+
         setInitialData({
           title: post.title,
           content: post.content,
-          thumbnailUrl: post.thumbnailUrl,
+          thumbnailImageKey: post.thumbnailImageKey,
           categories: post.postCategories.map((pc) => ({ id: pc.category.id })),
         });
-      } catch (e: any) {
-        if (e.name === 'AbortError') return;
+      } catch (e: unknown) {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
         console.error('記事取得エラー:', e);
-        setErrorMsg(e?.message ?? '記事の取得に失敗しました');
+        setErrorMsg(e instanceof Error ? e.message : '記事の取得に失敗しました');
         setInitialData(null);
       } finally {
         setLoading(false);
@@ -73,7 +81,7 @@ const EditPostPage: React.FC = () => {
       const res = await apiFetch(`/api/admin/posts/${id}`, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(data),// data.thumbnailImageKey を送る
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -81,9 +89,9 @@ const EditPostPage: React.FC = () => {
       }
       alert('更新しました');
       router.push('/admin/posts');
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('更新処理エラー:', e);
-      alert(e?.message ?? '更新に失敗しました');
+      alert(e instanceof Error ? e.message : '更新に失敗しました');
     } finally {
       setIsSubmitting(false);
     }
@@ -104,9 +112,9 @@ const EditPostPage: React.FC = () => {
       }
       alert('削除しました');
       router.push('/admin/posts');
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('削除処理エラー:', e);
-      alert(e?.message ?? '削除に失敗しました');
+      alert(e instanceof Error ? e.message : '削除に失敗しました');
     } finally {
       setIsSubmitting(false);
     }

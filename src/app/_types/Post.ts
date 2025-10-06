@@ -9,7 +9,7 @@ export interface Category {
 export interface BasePostPayload {
   title: string;
   content: string;
-  thumbnailUrl: string;
+  thumbnailImageKey: string;
   categories: { id: number }[];//関連付けるカテゴリーIDの配列（中間テーブルへ渡すため最小形）
 }
 
@@ -24,7 +24,7 @@ export interface Post {
   id: number;
   title: string;
   content: string;
-  thumbnailUrl: string;
+  thumbnailImageKey: string;
   //中間テーブル経由で取得したカテゴリー（postCategories[].category の形）。
   postCategories: {
     category: Category
