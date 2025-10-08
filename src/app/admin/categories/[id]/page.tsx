@@ -19,12 +19,13 @@ const EditCategoryPage: React.FC = () => {
   //ルートのIDを取得(例:/admin/categories/3の「3」を取得)(カテゴリーIDを取得、idはAPIへのリクエストに使用)
   const  id  = params?.id;
   const router = useRouter();//ページ遷移を制御する為のフック。更新・削除後に/admin/categoriesへリダイレクトするのに使用。
-  // /api/admin/*へはJWTを自動付与して fetch
-  const { apiFetch } = useApi();
+  // /api をベースに、認証ヘッダーなどは useApi 側で自動付与
+  const { api } = useApi("/api");// ← ここで /api を固定しておく
   const [name, setName] = useState("");//初期値は空
   const [isLoading, setIsLoading] = useState(false);
   const [ initialLoading, setInitialLoading] = useState(true);
 
+  // 初回取得（GET）
   //カテゴリー名をAPIから取得(初回のみ)(認証付き)
   useEffect(() => {
     if (!id) return;//idがundefinedの場合、処理を中止
@@ -33,12 +34,12 @@ const EditCategoryPage: React.FC = () => {
     (async () => {
       try {
         setInitialLoading(true);
-        const res = await apiFetch(`/api/admin/categories/${id}`, { signal: ac.signal });
+        const res = await api.get(`/admin/categories/${id}`, { signal: ac.signal });
         if (!res.ok) throw new Error(`取得失敗 (${res.status})`);
         const data: CategoryRes = await res.json();
         setName(data.category?.name ?? '');
       } catch (e: any) {
-        if (e.name === 'AbortError') return;
+        if (e?.name === 'AbortError') return;
         console.error('カテゴリー取得エラー:',e);
         alert('カテゴリー情報の取得に失敗しました');
       }finally {
@@ -46,7 +47,7 @@ const EditCategoryPage: React.FC = () => {
       }
     })();
     return () => ac.abort();
-  }, [id, apiFetch]);
+  }, [id, api]);
 
   //編集処理(PUT)
   //フォーム送信時にPUTリクエストを送り、成功すれば一覧画面へ遷移。
@@ -56,24 +57,24 @@ const EditCategoryPage: React.FC = () => {
       alert('カテゴリー名を入力してください');
       return;
     }
+
+    if (isLoading) return;
+
     setIsLoading(true);//開始時にtrue
     
     try {
-      const res = await apiFetch(`/api/admin/categories/${id}`,{
-        method: "PUT",
-        headers: {"Content-Type": "application/json"},//json形式で送る
-        body: JSON.stringify({ name:trimmed }),
-      });
+      // ← ボディだけ渡せば OK（Content-Type 付与/JSON化は useApi 内）
+      const res = await api.put(`/admin/categories/${id}`,{ name: trimmed});
 
-      if (!res.ok) {
+      if (res.ok) {
         alert("カテゴリーを更新しました");
         router.push("/admin/categories");//指定したURL(ここではカテゴリー一覧)に画面遷移する為の関数
       } else {
         const text = await res.text().catch(() => '');
         alert(`更新に失敗しました。(${res.status}) ${text ? `: ${text}` : ''}`);
       }
-    } catch (error) {
-      console.error("更新処理エラー:",error);
+    } catch (e) {
+      console.error("更新処理エラー:",e);
       alert("通信エラーが発生しました");
     } finally {
       setIsLoading(false);
@@ -82,13 +83,13 @@ const EditCategoryPage: React.FC = () => {
 
   //削除処理(DELETE)
   const handleDelete = async () => {
+    if (isLoading) return;
     const ok = confirm("本当に削除してもよろしいですか？");//ユーザーに確認ポップアップを出す
     if (!ok) return;//okでない場合(キャンセルされたら=falseされたら)その時点で関数の処理を終了する(何もしない)
+
     setIsLoading(true);
     try {
-      const res = await apiFetch(`/api/admin/categories/${id}`,{
-        method: "DELETE",
-      });
+      const res = await api.delete(`/admin/categories/${id}`);
       //カテゴリー削除に成功時にはカテゴリー一覧画面に移動
       if(res.ok) {
         alert("カテゴリーを削除しました");
@@ -98,8 +99,8 @@ const EditCategoryPage: React.FC = () => {
         alert(`削除に失敗しました。 (${res.status}）${text ? `: ${text}` : ''}`);
       }
       //エラーハンドリングとして例外処理(try-catch)を実施
-    } catch (error) {
-      console.error("削除処理エラー:",error);
+    } catch (e) {
+      console.error("削除処理エラー:",e);
       alert("通信エラーが発生しました");
     } finally {
       setIsLoading (false);

@@ -54,7 +54,8 @@ export const PostForm: React.FC<PostFormProps> = ({
   //全カテゴリー一覧を保持するstate
 
   //カテゴリー取得(管理API→JWT付与)
-  const { apiFetch } = useApi();
+  //変更：/api を base に固定（/admin 配下は Bearer 自動付与）
+  const { api } = useApi("/api");
   //APIから取得したカテゴリー一覧を格納
   const [allCategories, setAllCategories] = useState<Category[]>([]);
   const [catLoading, setCatLoading] = useState(true);
@@ -81,7 +82,8 @@ export const PostForm: React.FC<PostFormProps> = ({
       try {
         setCatLoading(true);
         setCatError(null);
-        const res = await apiFetch("/api/admin/categories", { signal: ac.signal });
+        //変更：apiFetch → api.get、かつ '/api' は付けない
+        const res = await api.get("/admin/categories", { signal: ac.signal });
         if (!res.ok) {
           const text = await res.text().catch(() => "");
           throw new Error(`カテゴリー取得に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
@@ -98,7 +100,7 @@ export const PostForm: React.FC<PostFormProps> = ({
       }
     })();
     return () => ac.abort();
-  }, [apiFetch]);
+  }, [api.get]);//[api]依存だと毎回実行されて無限取得になるのを防ぐ為[api.get]に
 
   //既存キーがある場合はプレビュー用の署名URLを発行
   useEffect(() => {

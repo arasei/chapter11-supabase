@@ -18,7 +18,8 @@ import type { Post } from "@/app/_types/Post";// DTO型を使い回し
 
 //記事一覧ページ
 const AdminPostPage: React.FC = () => {
-  const { apiFetch } = useApi();// /api/admin 配下はJWT自動付与
+  // /api を base に固定。/admin 配下は Bearer トークンが自動付与されます
+  const { api } = useApi("/api");
   const [posts, setPosts] = useState<Post[]>([]);//初期値は空配列に。空配列なら.map()が正常に動作し何も表示されないだけで済むため安全。
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -32,7 +33,8 @@ const AdminPostPage: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
-        const res = await apiFetch("/api/admin/posts", { signal: ac.signal });
+        // apiFetch → api.get に変更（/api は付けない）
+        const res = await api.get("/admin/posts", { signal: ac.signal });
         if (!res.ok) {
           const text = await res.text().catch(() => "");
           if (res.status === 401) throw new Error("未ログインです（401）。");
@@ -57,7 +59,7 @@ const AdminPostPage: React.FC = () => {
     })();
 
     return () => ac.abort();
-  }, [apiFetch]);
+  }, [api.get]);//[api]依存だと毎回実行されて無限取得になるのを防ぐ為[api.get]に
 
   if (loading) {
     return <div className="p-4">読み込み中...</div>

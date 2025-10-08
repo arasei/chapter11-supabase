@@ -9,9 +9,12 @@ import { useApi } from "@/app/_hooks/useApi";
 //管理者が新規記事を作成するページで、フォーム入力内容をAPI経由で送信し、
 //投稿完了後に記事一覧ページへ遷移するコンポーネント
 
-const NewPostPage = () => {
+
+//管理者が新規記事を作成するページ
+const NewPostPage: React.FC = () => {
   const router = useRouter();
-  const { apiFetch } = useApi(); // ← /api/admin 配下はJWT自動付与
+  // /api を base に固定（/admin 配下は Bearer 自動付与）
+  const { api } = useApi("/api"); 
   const [isSubmitting, setIsSubmitting] = useState(false);//送信中状態を管理
 
   // 新規作成時の送信処理
@@ -26,12 +29,8 @@ const NewPostPage = () => {
     try {
       //APIエンドポイントにPOSTリクエスト送信。
       // 投稿データをバックエンドに送る。
-      const res = await apiFetch("/api/admin/posts", {
-        //POSTメソッドでJSON形式のデータ送信を指定。
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),// data.thumbnailImageKey を含む
-      });
+      //認証ヘッダー＆JSON化はフック側で自動
+      const res = await api.post("/admin/posts", data);
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");

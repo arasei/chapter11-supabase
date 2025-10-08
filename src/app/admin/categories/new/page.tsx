@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useApi } from '@/app/_hooks/useApi';
 
-
+//全体の概要
 //新しいカテゴリーを作成する為のページを表示するコンポーネント。
 //CategoryFormコンポーネントを表示することで、ユーザーがカテゴリーを追加できる画面を構成している。
 const CreateCategories: React.FC = () => {
   const router = useRouter();
-  const { apiFetch } = useApi();///api/admin 配下はトークン自動付与
+  // /api をベースに固定（/admin 配下には Bearer トークンが自動付与されます）
+  const { api } = useApi("/api");
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (name: string) => {
@@ -19,14 +20,12 @@ const CreateCategories: React.FC = () => {
       alert('カテゴリー名を入力してください');
       return;
     }
+    if (isLoading) return;
 
     setIsLoading(true);
     try {
-      const res = await apiFetch('/api/admin/categories',{
-        method: 'POST',
-        headers: {'Content-Type': 'application/json' },
-        body: JSON.stringify({ name:trimmed }),
-      });
+      // ← headers/JSON.stringify は不要。ラッパが自動で付与します。
+      const res = await api.post('/admin/categories', { name: trimmed });
 
       if (res.ok) {
         alert('カテゴリーを作成しました。');
@@ -35,9 +34,10 @@ const CreateCategories: React.FC = () => {
         const text = await res.text().catch(() => '');
         alert(`エラーが発生しました (${res.status}) ${text ? `: ${text}` : ''}`);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "通信エラーが発生しました";
       //未ログイン(トークン無し)やネットワークエラー時
-      alert(e?.message ?? '通信エラーが発生しました');
+      alert(msg);
       console.error('作成エラー:', e);
     } finally {
       setIsLoading(false);

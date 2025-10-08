@@ -20,8 +20,8 @@ const EditPostPage: React.FC = () => {
   const id = params?.id;
   const router = useRouter();//ページ遷移を制御するためのルーターオブジェクトを取得。
 
-
-  const { apiFetch } = useApi();//api/admin 配下は JWT を自動付与して fetch
+  // /api を base に固定。/admin 配下は Bearer 付与を自動化
+  const { api } = useApi("/api");
 
   //編集フォームに初期表示する記事データをstateで管理。初期値はnull（未取得状態）
   const [initialData, setInitialData] = useState<CreatePost | null>(null);
@@ -39,7 +39,7 @@ const EditPostPage: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
-        const res = await apiFetch(`/api/admin/posts/${id}`, { signal: ac.signal });
+        const res = await api.get(`/admin/posts/${id}`, { signal: ac.signal });
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           throw new Error(`取得に失敗しました (${res.status}) ${text ? `: ${text}` : ''}`);
@@ -71,18 +71,15 @@ const EditPostPage: React.FC = () => {
     })();
 
     return () => ac.abort();
-  }, [id, apiFetch]);
+  }, [id, api]);
 
   //更新(PUT)
   const handleUpdate = async (data: CreatePost) => {
     if (isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const res = await apiFetch(`/api/admin/posts/${id}`, {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json' },
-        body: JSON.stringify(data),// data.thumbnailImageKey を送る
-      });
+      // ヘッダー/JSON.stringify は不要
+      const res = await api.put(`/admin/posts/${id}`, data);
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(`更新に失敗しました(${res.status}) ${text ? `: ${text}` : ''}`);
@@ -105,7 +102,7 @@ const EditPostPage: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const res = await apiFetch(`/api/admin/posts/${id}`, { method: 'DELETE' });
+      const res = await api.delete(`/admin/posts/${id}`);
       if (!res.ok) {
         const text = await res.text().catch(() => '');
         throw new Error(`削除に失敗しました (${res.status}) ${text ? `: ${text}` : ''}`);

@@ -8,13 +8,15 @@ import { useApi } from '@/app/_hooks/useApi';
 //管理者専用のカテゴリー一覧ページを実装し、APIから取得したカテゴリーを一覧表示し、
 // それぞれの編集ページへのリンクを提供するNext.jsのクライアントコンポーネント
 
+//管理者専用のカテゴリーページ
 type Category = {
   id: number;
   name: string;
 };
 //カテゴリー一覧ページ
 const AdminCategoriesPage: React.FC = () => {
-  const { apiFetch } = useApi();///api/admin 配下はトークン自動付与
+  // /apiをベースに固定。/admin配下はトークンが自動付与されます。
+  const { api } = useApi("/api");
   const [categories, setCategories] = useState<Category[]>([]);//Category型の配列でstateを管理する、初期値は空配列
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -29,18 +31,23 @@ const AdminCategoriesPage: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
-        const res = await apiFetch('/api/admin/categories', { signal: ac.signal });
+        // ここだけ変更：apiFetch → api.get、/api は付けない（baseで付く）
+        const res = await api.get('/admin/categories', { signal: ac.signal });
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           throw new Error(`取得に失敗しました（${res.status}）${text ? `: ${text}` : ''}`);
         }
 
-        const data = await res.json();
-        setCategories(Array.isArray(data.categories) ? data.categories : []);
-      } catch (e: any) {
-        if (e.name === 'AbortError') return;
+        const data: unknown = await res.json();
+        const list = (data as { categories?: unknown }).categories;
+        setCategories(Array.isArray(list) ? (list as Category[]) : []);
+      } catch (e: unknown) {
+        //中断は無視
+        if (e instanceof DOMException && e.name === 'AbortError') return;
         console.error('カテゴリー取得エラー:', e);
-        setErrorMsg(e?.message ?? 'カテゴリーの取得に失敗しました');
+        setErrorMsg(
+          e instanceof Error ? e.message : 'カテゴリーの取得に失敗しました'
+        );
         setCategories([]);
       } finally {
         setLoading(false);
@@ -48,7 +55,7 @@ const AdminCategoriesPage: React.FC = () => {
     })();
 
     return () => ac.abort();
-  }, [apiFetch]);
+  }, [api.get]);//[api]依存だと毎回実行されて無限取得になるのを防ぐ為[api.get]に
 
   if (loading) return <div className="p-4">読み込み中…</div>;
 
