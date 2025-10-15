@@ -1,9 +1,10 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import useSWR, { useSWRConfig } from "swr";
+import { useMemo, useState } from "react";
 import { PostForm } from "../_components/PostForm";
-import { Post, CreatePost } from "@/app/_types/Post";
+import type { Post, CreatePost } from "@/app/_types/Post";
 import { useApi } from '@/app/_hooks/useApi';
 
 
@@ -22,104 +23,87 @@ const EditPostPage: React.FC = () => {
 
   // /api を base に固定。/admin 配下は Bearer 付与を自動化
   const { api } = useApi("/api");
+  const { mutate } = useSWRConfig();
 
-  //編集フォームに初期表示する記事データをstateで管理。初期値はnull（未取得状態）
-  const [initialData, setInitialData] = useState<CreatePost | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false); //送信中状態を管理
-  const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!id) return;
-    //AbortController を追加し、アンマウント時のリクエスト競合を回避
-    const ac = new AbortController();
-
-    (async () => {
-      try {
-        setLoading(true);
-        setErrorMsg(null);
-
-        const res = await api.get(`/admin/posts/${id}`, { signal: ac.signal });
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          throw new Error(`取得に失敗しました (${res.status}) ${text ? `: ${text}` : ''}`);
-        }
-
-        const data: PostRes = await res.json();
-        const post = data.post;
-
-        if (!post) {
-          setInitialData(null);
-          setErrorMsg("データが見つかりませんでした。");
-          return;//ここで早期リターン
-        }
-
-        setInitialData({
-          title: post.title,
-          content: post.content,
-          thumbnailImageKey: post.thumbnailImageKey,
-          categories: post.postCategories.map((pc) => ({ id: pc.category.id })),
-        });
-      } catch (e: unknown) {
-        if (e instanceof DOMException && e.name === 'AbortError') return;
-        console.error('記事取得エラー:', e);
-        setErrorMsg(e instanceof Error ? e.message : '記事の取得に失敗しました');
-        setInitialData(null);
-      } finally {
-        setLoading(false);
+  // ---- 取得（SWR） ----
+  const postKey = id ? `/admin/posts/${id}` : null;
+  const { data, error, isLoading } = useSWR<PostRes>(
+    postKey,
+    async (key: string) => {
+      const res = await api.get(key);
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`取得に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
       }
-    })();
+      return res.json();
+    }
+  );
 
-    return () => ac.abort();
-  }, [id, api]);
+  // フォーム初期値（SWRの結果から生成）
+  const initialData: CreatePost | null = useMemo(() => {
+    const p = data?.post;
+    if (!p) return null;
+    return {
+      title: p.title,
+      content: p.content,
+      thumbnailImageKey: p.thumbnailImageKey,
+      categories: p.postCategories.map((pc) => ({ id: pc.category.id })),
+    };
+  }, [data]);
 
-  //更新(PUT)
-  const handleUpdate = async (data: CreatePost) => {
-    if (isSubmitting) return;
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ---- 更新（PUT） ----
+  const handleUpdate = async (payload: CreatePost) => {
+    if (!id || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      // ヘッダー/JSON.stringify は不要
-      const res = await api.put(`/admin/posts/${id}`, data);
+      const res = await api.put(`/admin/posts/${id}`, payload);
       if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`更新に失敗しました(${res.status}) ${text ? `: ${text}` : ''}`);
+        const text = await res.text().catch(() => "");
+        throw new Error(`更新に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
       }
-      alert('更新しました');
-      router.push('/admin/posts');
+      // 一覧・詳細のキャッシュを更新
+      mutate("/admin/posts");
+      mutate(`/admin/posts/${id}`);
+      alert("更新しました");
+      router.push("/admin/posts");
     } catch (e: unknown) {
-      console.error('更新処理エラー:', e);
-      alert(e instanceof Error ? e.message : '更新に失敗しました');
+      console.error("更新処理エラー:", e);
+      alert(e instanceof Error ? e.message : "更新に失敗しました");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  //削除(DELETE)
+  // ---- 削除（DELETE） ----
   const handleDelete = async () => {
-    if (isSubmitting) return;
-    const ok = confirm('本当に削除しますか？');
-    if (!ok) return;
+    if (!id || isSubmitting) return;
+    if (!confirm("本当に削除しますか？")) return;
 
     setIsSubmitting(true);
     try {
       const res = await api.delete(`/admin/posts/${id}`);
       if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`削除に失敗しました (${res.status}) ${text ? `: ${text}` : ''}`);
+        const text = await res.text().catch(() => "");
+        throw new Error(`削除に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
       }
-      alert('削除しました');
-      router.push('/admin/posts');
+      // 一覧キャッシュを更新
+      mutate("/admin/posts");
+      alert("削除しました");
+      router.push("/admin/posts");
     } catch (e: unknown) {
-      console.error('削除処理エラー:', e);
-      alert(e instanceof Error ? e.message : '削除に失敗しました');
+      console.error("削除処理エラー:", e);
+      alert(e instanceof Error ? e.message : "削除に失敗しました");
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  // ---- 画面ステート ----
   if (!id) return <p className="p-4">IDが不正です。</p>;
-  if (loading) return <p className="p-4">読み込み中...</p>;
-  if (errorMsg) return <p className="p-4 text-red-600">{errorMsg}</p>;
+  if (isLoading) return <p className="p-4">読み込み中...</p>;
+  if (error) return <p className="p-4 text-red-600">{error.message}</p>;
   if (!initialData) return <p className="p-4">データが見つかりませんでした。</p>;
 
   return (
@@ -127,7 +111,7 @@ const EditPostPage: React.FC = () => {
       initialData={initialData}
       onSubmit={handleUpdate}
       onDelete={handleDelete}
-      submitLabel={isSubmitting ? '更新中...' : '更新'}
+      submitLabel={isSubmitting ? "更新中..." : "更新"}
       isSubmitting={isSubmitting}
     />
   );

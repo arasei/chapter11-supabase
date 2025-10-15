@@ -1,10 +1,10 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useState } from "react";
 import { CategoryForm } from "../../posts/_components/CategoryForm"
 import { useApi } from '@/app/_hooks/useApi'
+import useSWR, { mutate } from "swr";
 
 //全体の概要
 //このコードは、特定のカテゴリーの情報をAPIから取得し、
@@ -13,7 +13,7 @@ import { useApi } from '@/app/_hooks/useApi'
 type CategoryRes = { category?: { name?: string }};
 
 //カテゴリー編集(更新、削除)ページ
-const EditCategoryPage: React.FC = () => {
+export default function EditCategoryPage () {
   // /admin/categories/[id]のid
   const params = useParams<{ id:string }>();
   //ルートのIDを取得(例:/admin/categories/3の「3」を取得)(カテゴリーIDを取得、idはAPIへのリクエストに使用)
@@ -21,110 +21,75 @@ const EditCategoryPage: React.FC = () => {
   const router = useRouter();//ページ遷移を制御する為のフック。更新・削除後に/admin/categoriesへリダイレクトするのに使用。
   // /api をベースに、認証ヘッダーなどは useApi 側で自動付与
   const { api } = useApi("/api");// ← ここで /api を固定しておく
-  const [name, setName] = useState("");//初期値は空
-  const [isLoading, setIsLoading] = useState(false);
-  const [ initialLoading, setInitialLoading] = useState(true);
+  
+  const { data, error, isLoading } = useSWR<CategoryRes>(
+    id ? `/admin/categories/${id}` : null,
+    (key) => api.get(key).then((r) => {
+      if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
+      return r.json();
+    }),
+    { revalidateOnFocus: false }
+  );
 
-  // 初回取得（GET）
-  //カテゴリー名をAPIから取得(初回のみ)(認証付き)
-  useEffect(() => {
-    if (!id) return;//idがundefinedの場合、処理を中止
-    const ac = new AbortController();
 
-    (async () => {
-      try {
-        setInitialLoading(true);
-        const res = await api.get(`/admin/categories/${id}`, { signal: ac.signal });
-        if (!res.ok) throw new Error(`取得失敗 (${res.status})`);
-        const data: CategoryRes = await res.json();
-        setName(data.category?.name ?? '');
-      } catch (e: any) {
-        if (e?.name === 'AbortError') return;
-        console.error('カテゴリー取得エラー:',e);
-        alert('カテゴリー情報の取得に失敗しました');
-      }finally {
-        setInitialLoading(false);
-      }
-    })();
-    return () => ac.abort();
-  }, [id, api]);
+  const [busy, setBusy] = useState(false);
+
 
   //編集処理(PUT)
   //フォーム送信時にPUTリクエストを送り、成功すれば一覧画面へ遷移。
   const handleUpdate = async (newName: string) => {
-    const trimmed = newName.trim();
-    if (!trimmed) {
-      alert('カテゴリー名を入力してください');
-      return;
-    }
-
-    if (isLoading) return;
-
-    setIsLoading(true);//開始時にtrue
-    
+    const name = newName.trim();
+    if (!name || busy) return;
+    setBusy(true);
     try {
-      // ← ボディだけ渡せば OK（Content-Type 付与/JSON化は useApi 内）
-      const res = await api.put(`/admin/categories/${id}`,{ name: trimmed});
-
-      if (res.ok) {
-        alert("カテゴリーを更新しました");
-        router.push("/admin/categories");//指定したURL(ここではカテゴリー一覧)に画面遷移する為の関数
-      } else {
-        const text = await res.text().catch(() => '');
-        alert(`更新に失敗しました。(${res.status}) ${text ? `: ${text}` : ''}`);
-      }
-    } catch (e) {
-      console.error("更新処理エラー:",e);
-      alert("通信エラーが発生しました");
+      const res = await api.put('/admin/categories/${id}', { name });
+      if (!res.ok) throw new Error('更新に失敗しました(${res.status})');
+      //一覧のキャッシュも更新したい場合にキーを指定して再検証
+      mutate('/admin/categories');
+      alert('カテゴリーを更新しました')
+      router.push('/admin/categories')//指定したURL(ここではカテゴリー一覧)に画面遷移する為の関数
+    } catch(e: any) {
+      alert(e?.message ?? '通信エラー');
     } finally {
-      setIsLoading(false);
+      setBusy(false);
     }
   };
 
   //削除処理(DELETE)
   const handleDelete = async () => {
-    if (isLoading) return;
-    const ok = confirm("本当に削除してもよろしいですか？");//ユーザーに確認ポップアップを出す
-    if (!ok) return;//okでない場合(キャンセルされたら=falseされたら)その時点で関数の処理を終了する(何もしない)
-
-    setIsLoading(true);
+    if (busy || !confirm('本当に削除しますか？')) return;
+    setBusy(true);
     try {
-      const res = await api.delete(`/admin/categories/${id}`);
       //カテゴリー削除に成功時にはカテゴリー一覧画面に移動
-      if(res.ok) {
-        alert("カテゴリーを削除しました");
-        router.push("/admin/categories");//新しいURLを履歴に追加してページ遷移する(前のページに戻れる)
-      } else {
-        const text = await res.text().catch(() => '');
-        alert(`削除に失敗しました。 (${res.status}）${text ? `: ${text}` : ''}`);
-      }
+      const res = await api.delete('/admin/categories/${id}');
+      if (res.ok) throw new Error('削除に失敗しました(${res.status})');
+      mutate('/admin/categories');
+      alert('削除しました');
+      router.push('/admin/categories')
+    } catch (e: any) {
       //エラーハンドリングとして例外処理(try-catch)を実施
-    } catch (e) {
-      console.error("削除処理エラー:",e);
-      alert("通信エラーが発生しました");
+      alert(e?.message ?? '通信エラー')
     } finally {
-      setIsLoading (false);
+      setBusy(false);
     }
   };
 
   if (!id) return <div className="p-4">IDが不正です。</div>;
-  if (initialLoading) return <div className="p-4">読み込み中…</div>;
+  if (isLoading) return <div className="p-4">読み込み中...</div>
+  if (error) return <div className="p-4 text-red-600">{String(error)}</div>
+
+  const defaultValue = data?.category?.name ?? '';
 
   return (
     <div className="space-y-4 p-4">
-      <h1 className="text-lg font-bold mb-4">
-        カテゴリー編集
-      </h1>
-
+      <h1 className="text-lg font-bold mb-4">カテゴリー編集</h1>
       <CategoryForm
+        defaultValue={defaultValue}
         onSubmit={handleUpdate}
         onDelete={handleDelete}
-        defaultValue={name}
         submitLabel="更新"
-        disabled={isLoading}
+        disabled={busy}
       />
     </div>
   );
 };
-
-export default EditCategoryPage;
