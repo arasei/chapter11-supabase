@@ -2,22 +2,37 @@
 //Client:ここでガードを呼ぶ
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";//現在のURLパス（例: /admin/posts）を取得するためのフック。現在のページがどれかを判別して、ナビゲーションにハイライトを付けるために使う。
+//現在のURLパス（例: /admin/posts）を取得するためのフック。
+// 現在のページがどれかを判別して、ナビゲーションにハイライトを付けるために使う。
+import { usePathname } from "next/navigation";
 import { useRouteGuard } from "../_hooks/useRouteGuard";
 import { useSupabaseSession } from "@/app/_hooks/useSupabaseSession";
 
 
 //全体の概要
-//管理画面のレイアウトを構成するためのサイドバー付きのReactコンポーネント。
-//現在のURLに応じて「記事一覧」または「カテゴリー一覧」メニューにハイライトを付け、
-//指定された子コンポーネント（children）をメインエリアに表示する。
+// 管理画面の共通レイアウト（サイドバー付き）で、
+// ログイン状態をガードしつつ現在のURLに応じてメニュー(「記事一覧」または「カテゴリー一覧」)をハイライトし、
+// 子コンテンツ(children)をメイン領域に描画するクライアントコンポーネント
+
+
+//このコンポーネントは、「ログインしている人だけが使える管理画面の外枠」。
+//左にメニュー、右にページの中身。
+//URLを見て、今どのページか自動で色付けしてくれる。
+//ログインしていない人は、この枠に入る前にログインページへ案内される
+
+//処理の流れ
+// まず「ログインしてる？」をチェック → してなければログイン画面へ。
+// 判定中は「読み込み中…」だけ出してチラつきを防止。
+// ログインしていれば、左にメニュー（記事一覧／カテゴリー一覧）、右に**各ページの中身（children）**が表示されます。
+// URL に合わせて、該当メニューに青いハイライトが付きます。
 
 //useApi は API を叩く各ページで使用（一覧/作成/編集など）。
-//layout / AdminShell は API を叩かないので不要
-////useRouteGuard() と useSupabaseSession() を使って認証制御。
+//layout / AdminShell は API を叩かないのでuseApiは不要
+//useRouteGuard() と useSupabaseSession() を使って認証制御。
 
 
-// ネストURLでもハイライトできるように
+//末尾のスラッシュ(/)を取って比較し、
+// /admin/posts/* のようなネストURLでも親メニューをアクティブ(ハイライトできる様に)にする。
 const normalize = (p: string) => (p.replace(/\/+$/, '') || '/');
 const isActive = (base: string, current: string) => {
   const b = normalize(base);
@@ -28,17 +43,18 @@ const isActive = (base: string, current: string) => {
 
 
 //管理画面のレイアウトコンポーネントを定義
-//children はこのレイアウトの中に表示したいコンテンツ
+//この外枠に入る全ての管理ページを一括でガード。
+//children = このレイアウトの中に表示したいページの中身
 export default function AdminShell({ children }: { children: React.ReactNode}) {
   //ここでルートガードを実行(Clientなので可能)
   //ガードはClientコンポーネントで呼ぶ
   useRouteGuard();
 
+  //認証状態と現在のURLを取得。
   const { session, isLoading } = useSupabaseSession();
   const pathname = usePathname();//現在のパス（例: /admin/categories）を取得してリンクのハイライトに使う。
 
-  //children=「このレイアウト内に表示したいページの中身」
-  //判定中はチラつき防止
+  //session判定中はレイアウトの骨格だけ出してチラつき防止
   if (isLoading) {
     return (
       <div className="flex min-h-screen">
@@ -49,12 +65,12 @@ export default function AdminShell({ children }: { children: React.ReactNode}) {
   }
 
 
-  //未ログインはuseRouteGuardが /loginに遷移中なので描画しない
+  //未ログインなら何も描画しない（useRouteGuardが /loginに遷移中の為）。
   if (!session) return null;
 
   return (
     <div className="flex min-h-screen">
-      {/* サイドバー */}
+      {/* サイドバーエリア*/}
       <aside className="w-60 bg-gray-100">
         <nav aria-label="管理メニュー">
           <ul className="space-y-0">
