@@ -6,8 +6,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ブログ記事テーブル
@@ -15,7 +16,9 @@ model Post {
   id             Int            @id @default(autoincrement())
   title          String
   content        String
-  thumbnailUrl   String
+  //DBスキーマを「URL → キー」へ変更
+  //↓ ストレージ上の“キー”を保存するように変更
+  thumbnailImageKey   String?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   postCategories PostCategory[]

@@ -1,81 +1,78 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+
+import Link from "next/link";//ページ遷移用
+import useSWR from "swr";//データ取得用
+import { useApi } from "@/app/_hooks/useApi";//認証付きAPIラッパ
+import type { Post } from "@/app/_types/Post";//記事の型(DTO型を使い回し)
+
+
 
 //全体の概要
-// このコンポーネントは、Supabase の認証トークンを使ってログイン中の管理者だけがアクセスできる記事一覧ページを表示し、
-// 記事ごとにリンク付きで詳細ページに飛べるようにする管理画面機能です。
+// 認証付きAPIから記事一覧を取得して表示し、
+// 各記事の編集ページと新規作成ページへ移動できる、管理者向けのNext.jsクライアントページ。
 
-type Category = {
-  id: number;
-  name: string;
-};
+//イメージ
+// 管理者が記事を確認・管理するための一覧ページです。
+// ブログの「管理画面トップ」のような役割
 
-type Post = {
-  id: number;
-  title: string;
-  createdAt: string;//作成日時
-  postCategories: {
-    category: Category;
-  }[];
-};
+//処理の流れ
+//ページを開くと、まずAPIから記事一覧を取得します。
+//取得できたら、タイトルと作成日を並べて表示し、タイトルをクリックすると編集ページへ移動できます。
+//右上の**「新規作成」**ボタンから、新しい記事を作るページへ移動できます。
+//読み込み中は「読み込み中…」を、失敗したらエラーメッセージを表示します。
 
-//記事一覧ページ
-const AdminPostPage: React.FC = () => {
-  const [posts, setPosts] = useState<Post[]>([]);//初期値は空配列に。空配列なら.map()が正常に動作し何も表示されないだけで済むため安全。
-  useEffect(() => {
-    const fetchPosts = async () => {
-      try {
-        const res = await fetch("/api/admin/posts");//fetch 関数で /api/admin/posts というエンドポイントに GET リクエストを送信。
-        const data = await res.json();
-        console.log("APIレスポンス:", data);//デバック用の出力
-        //data.posts が配列かどうかを Array.isArray() で確認。
-        //配列であればそのまま posts にセット。
-        //配列でなければ、空配列 [] をセットして安全に処理を継続。
-        //安全対策：API が不正な形式でも .map() でエラーを起こさないようにしている。
-        setPosts(Array.isArray(data.posts) ? data.posts : []);
-      } catch (error) {
-        console.error("記事取得エラー", error);
-        setPosts([]);//念の為catchでもposts を空配列にして、表示側で .map() してもエラーにならないようにする。
-      }
-    };
-    fetchPosts();
-  }, []);
 
+
+export default function AdminPostPage() {
+  // /apiベースURLで認証付きのAPIクライアントを取得。
+  const { api } = useApi('/api');
+  //SWRの設定
+  // キー：/admin/posts（一覧API）
+  // フェッチャ：api.get → ステータス確認 → JSON返却
+  // オプション：フォーカス時の自動再取得をオフ
+  const { data, error, isLoading } = useSWR<{ posts: Post[] }>(
+    '/admin/posts',
+    (key) => api.get(key).then((r) => {
+      if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
+      return r.json();
+    }),
+    { revalidateOnFocus: false }
+  );
+
+  //状態分岐でローディング・エラーを早期リターン表示。
+  if (isLoading) return <div className="p-4">読み込み中...</div>;
+  if (error) return <div className="p-4 text-red-600">{String(error)}</div>;
+
+  //Array.isArray()で安全に配列を取り出し、無ければ空配列に。
+  //Array.isArray() : その値が配列かどうかを安全に確認する関数
+  const posts = Array.isArray(data?.posts) ? data!.posts : [];
 
   return (
+    //ヘッダー部分
+    // タイトルと「新規作成」ボタン。
     <div className="space-y-4 p-4">
       <div className="flex justify-between items-center mb-9 mt-2">
         <h1 className="text-lg font-bold mb-9 mt-2">記事一覧</h1>
-        <Link
-          href="/admin/posts/new"
-          className="py-2 px-4 border rounded-lg text-white bg-blue-700"
-        >
+        <Link href="/admin/posts/new" className="py-2 px-4 border rounded-lg text-white bg-blue-700">
           新規作成
         </Link>
       </div>
-      <div>
-        {/*記事が1件以上ある場合の表示*/}
-        {Array.isArray(posts) && posts.length > 0 ?(
-          posts.map((post) => (
-            //各記事を順番に表示
-            <div key={post.id}>
-              <Link href={`/admin/posts/${post.id}`}>
-                <h2 className="font-black">{post.title}</h2>
-              </Link>
-              <p>
-                {new Date(post.createdAt).toLocaleDateString()}
-              </p>
-            </div>
-          ))
-        ) : (
-          //記事がない場合の表示
-          <p>記事がありません</p>
-        )}
-      </div>
+
+      {/*一覧表示*/}
+      {/*記事があるときは map で並べ、タイトルをクリックで編集ページへ。なければ空表示。*/}
+      {posts.length ? (
+        posts.map((post) => (
+          <div key={post.id}>
+            <Link href={`/admin/posts/${post.id}`}>
+              <h2 className="font-black">{post.title}</h2>
+            </Link>
+            <p>{new Date(post.createdAt).toLocaleDateString('ja-JP')}</p>
+          </div>
+        ))
+      ) : (
+        <p>記事がありません</p>
+      )}
     </div>
   );
-};
-
-export default AdminPostPage;
+}

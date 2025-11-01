@@ -1,113 +1,139 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import useSWR, { useSWRConfig } from "swr";
+import { useMemo, useState } from "react";
 import { PostForm } from "../_components/PostForm";
-import { Post, CreatePost } from "@/app/_types/Post";
+import type { Post, CreatePost } from "@/app/_types/Post";
+import { useApi } from '@/app/_hooks/useApi';
 
 
 //全体の概要
-//管理者が特定の記事の内容を取得し、フォームで編集・削除できるページを実装したコード
+//URL から取得した記事IDを使って記事データを API で取得し、
+// フォームで内容を編集・削除できる管理用の Next.js クライアントページ
 
-const EditPostPage = () => {
-  const { id } = useParams();//URLから記事のIDを取得。動的ルートのパラメータを扱う
+//記事編集ページ
+//「IDで記事を引っ張ってきて、フォームで編集 or 削除して、終わったら一覧へ戻す」 ための標準的な管理画面
+
+//処理の流れ
+//URL の末尾から 記事ID を読み取り、
+//その ID で 記事の現在データ を API から取ってきてフォームに入れ、
+//ユーザーが内容を直して 更新ボタンで保存、または 削除ボタンで削除、
+//完了したら 一覧ページ に戻る——という一連の流れを、エラー時の表示や送信中の抑止まで含めてまとめている。
+
+type PostRes = { post: Post | null };
+
+
+const EditPostPage: React.FC = () => {
+  //動的ルートの id を取得→ローカル変数に格納。
+  //URL の /admin/posts/[id]
+  //URLから記事のIDを取得。動的ルートのパラメータを扱う
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
   const router = useRouter();//ページ遷移を制御するためのルーターオブジェクトを取得。
 
-  //編集フォームに初期表示する記事データをstateで管理。初期値はnull（未取得状態）
-  const [initialData, setInitialData] = useState<CreatePost | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false); //送信中状態を管理
+  //認証付き API クライアント
+  // /api を base に固定。/admin 配下は Bearer 付与を自動化
+  const { api } = useApi("/api");
+  const { mutate } = useSWRConfig();
 
-  // 記事データとカテゴリ一覧を取得
-  useEffect(() => {
-    //非同期で記事データをAPIから取得する関数
-    const fetchData = async () => {
-      //記事IDをもとに記事詳細データをAPIから取得。
-      const res = await fetch(`/api/admin/posts/${id}`);
-      //APIレスポンスをJSONに変換し、postプロパティを含むことを型で示す。
-      const data: { post: Post } = await res.json();
-      //取得した記事情報を変数に格納。
-      const post = data.post;
-
-      //取得した記事の情報を、CreatePost型に合う形でセットし、フォームの初期値として登録。
-      setInitialData({
-        title: post.title,
-        content: post.content,
-        thumbnailUrl: post.thumbnailUrl,
-        categories: post.postCategories.map((pc) => ({ id: pc.category.id })),
-      });
-    };
-
-    fetchData();//先ほどのfetchData関数を実行
-  }, [id]);//idが変わるたびにfetchDataを再実行
-
-  // 更新処理（PUT）
-  //編集フォームから送信された更新データを受け取り、APIにPUTリクエストを送る関数
-  const handleUpdate = async (data: CreatePost) => {
-    if (isSubmitting) return;//2重送信防止
-    setIsSubmitting(true);    // 送信開始
-
-    try {
-      //編集内容をPUTリクエストでサーバーに送信。
-      const res = await fetch(`/api/admin/posts/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      //HTTPステータスが成功でなければエラーを投げる。
-      if (!res.ok) throw new Error("更新失敗");
-      //成功したらユーザーに通知
-      alert("更新しました");
-      //編集一覧ページへ遷移
-      router.push("/admin/posts");
-    } catch (error) {
-      console.error(error);//エラー発生時の処理
-      alert("更新に失敗しました");
-    } finally {
-      setIsSubmitting(false);//送信完了
+  // ---- 取得（SWR） ----
+  //SWR のキー：ID があれば /admin/posts/${id}、なければ null（フェッチ停止）
+  const postKey = id ? `/admin/posts/${id}` : null;
+  const { data, error, isLoading } = useSWR<PostRes>(
+    postKey,
+    //api.get → ステータス検査 → JSON 返却
+    async (key: string) => {
+      const res = await api.get(key);
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`取得に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
+      }
+      return res.json();
     }
-  };
+  );
 
-  // 削除処理（DELETE）
-  //記事削除処理用関数
-  const handleDelete = async () => {
-    //削除確認のダイアログ表示
-    const ok = confirm("本当に削除しますか？");
-    if (!ok) return;//ユーザーがキャンセルした場合中断
-    if (isSubmitting) return; // 削除も連打防止
-    setIsSubmitting(true); // 削除時もボタン無効化
+  //取得データを PostForm 用の CreatePost 形に整形（メモ化）。
+  // フォーム初期値（SWRの結果から生成）
+  //フォームの initialData を毎レンダリング再生成しないため。
+  const initialData: CreatePost | null = useMemo(() => {
+    const p = data?.post;
+    if (!p) return null;
+    return {
+      title: p.title,
+      content: p.content,
+      thumbnailImageKey: p.thumbnailImageKey,
+      categories: p.postCategories.map((pc) => ({ id: pc.category.id })),
+    };
+  }, [data]);
 
+  //送信中フラグで多重送信を防止
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ---- 更新（PUT） ----
+  //PUT で更新→一覧と詳細を mutate → 一覧へ遷移。
+  const handleUpdate = async (payload: CreatePost) => {
+    if (!id || isSubmitting) return;
+    setIsSubmitting(true);
     try {
-      //DELETEメソッドで記事削除APIを呼ぶ。
-      const res = await fetch(`/api/admin/posts/${id}`, {
-        method: "DELETE",
-      });
-      //削除失敗時にエラーを投げる。
-      if (!res.ok) throw new Error("削除失敗");
-      //削除成功の通知。
-      alert("削除しました");
-      //削除後に記事一覧ページへ遷移。
+      const res = await api.put(`/admin/posts/${id}`, payload);
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`更新に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
+      }
+      // 一覧・詳細のキャッシュを更新
+      mutate("/admin/posts");
+      mutate(`/admin/posts/${id}`);
+      alert("更新しました");
       router.push("/admin/posts");
-    } catch (error) {
-      console.error(error);//エラー表示とユーザー通知。
-      alert("削除に失敗しました");
+    } catch (e: unknown) {
+      console.error("更新処理エラー:", e);
+      alert(e instanceof Error ? e.message : "更新に失敗しました");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  //データ取得中はローディング表示。
-  if (!initialData) {
-    return <p>読み込み中...</p>;
-  }
+  // ---- 削除（DELETE） ----
+  //DELETE で削除→一覧を mutate → 一覧へ遷移。
+  const handleDelete = async () => {
+    if (!id || isSubmitting) return;
+    if (!confirm("本当に削除しますか？")) return;
 
-  //初期データと操作関数を渡してフォームをレンダリング。
+    setIsSubmitting(true);
+    try {
+      const res = await api.delete(`/admin/posts/${id}`);
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`削除に失敗しました（${res.status}）${text ? `: ${text}` : ""}`);
+      }
+      // 一覧キャッシュを更新
+      mutate("/admin/posts");
+      alert("削除しました");
+      router.push("/admin/posts");
+    } catch (e: unknown) {
+      console.error("削除処理エラー:", e);
+      alert(e instanceof Error ? e.message : "削除に失敗しました");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // ---- 画面ステート ----
+  //早期リターンで状態別の表示。
+  if (!id) return <p className="p-4">IDが不正です。</p>;
+  if (isLoading) return <p className="p-4">読み込み中...</p>;
+  if (error) return <p className="p-4 text-red-600">{error.message}</p>;
+  if (!initialData) return <p className="p-4">データが見つかりませんでした。</p>;
+  
+  //PostForm に初期値とハンドラを渡して描画。送信中はボタン文言を変更。
   return (
     <PostForm
-      initialData={initialData} // 記事の初期データ
-      onSubmit={handleUpdate}    // 更新処理
-      onDelete={handleDelete}    // 削除処理
-      submitLabel={isSubmitting ? "更新中..." : "更新"} //ボタンラベル切り替え
-      isSubmitting={isSubmitting}//送信中状態渡す
+      initialData={initialData}
+      onSubmit={handleUpdate}
+      onDelete={handleDelete}
+      submitLabel={isSubmitting ? "更新中..." : "更新"}
+      isSubmitting={isSubmitting}
     />
   );
 };

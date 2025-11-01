@@ -13,11 +13,14 @@
 
 # misc
 .DS_Store
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+
+# Env files (keep only the example)
+.env
+.env.*
+!.env.example
 
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+printf "\n# Next.js build output\n.next/\n# mirror repo created for filter-repo (do not commit)\n/chapter11-supabase.git/\n" >> .gitignore
