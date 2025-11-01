@@ -1,11 +1,28 @@
+//Next.js App Router の API で使うリクエスト/レスポンス型。
 import { NextRequest, NextResponse } from "next/server";
+//Prisma本体の型とクライアント。Prisma はエラー型や GetPayload などで使用。
 import { Prisma, PrismaClient } from "@prisma/client";
+//認証ガード。ログイン状態を検証。assertRole は将来のロール制御に使える（今はコメントアウト）。
 import { requireUser /*, assertRole */ } from "@/app/api/_lib/auth";
+
+//全体の概要
+// 認証済みユーザー向けに、指定記事IDの「取得（GET）／更新（PUT）／削除（DELETE）」を Prisma で実行し、
+// DBの日時(Date)を ISO 文字列へ変換した DTO で返す Next.js App Router の管理API
+
+//Prisma ORMを使ってデータベースのpostとその関連カテゴリー情報を操作する。
+
+//イメージ
+// このAPIは、記事詳細画面の裏方です。
+// 画面を開く → GET で「記事＋カテゴリ」を1回で取る
+// 直して保存 → PUT で「本文・サムネ・カテゴリ」を更新（カテゴリは一旦リセットして入れ直す）
+// 削除ボタン → DELETE で記事を消す
+// どの操作もログイン必須で、返ってくる日時はそのまま表示に使える文字列になっています。
+
 //自作の型定義をimport。
-//UpdatePostRequestBody: PUT のボディ型（title/content/thumbnailUrl/categories）。
-//GetPostResponse/PutPostResponse/DeletePostResponse: 各メソッドのレスポンス型。
-//ApiError:エラー時の共通レスポンス。
-//Post as PostDTO:画面用（DTO）に整形した記事型（createdAt/updatedAt が string）。
+// UpdatePostRequestBody: PUT で受け取るボディの型（title/content/thumbnailImageKey/categories）。
+// GetPostResponse/PutPostResponse/DeletePostResponse: 各メソッドのレスポンス(返却)型。
+// ApiError:エラー時の共通レスポンス。
+// Post as PostDTO:画面表示用（DTO）に整形した記事型（createdAt/updatedAt(日時) は string）。
 import type { UpdatePostRequestBody,
               GetPostResponse,
               PutPostResponse,
@@ -15,20 +32,12 @@ import type { UpdatePostRequestBody,
 } from "@/app/_types/Post";
 
 
-//全体の概要
-//Prisma を使って記事の「取得（GET）／更新（PUT）／削除（DELETE）」を行い、
-//DBの Date を ISO文字列に直した DTO に変換して返す、管理者用の Next.js API
-//管理者用「記事の個別取得・更新・削除」API。
-//Next.js の API ルート /api/admin/posts/[id] に対応したもので、
-//指定された記事IDに基づく「記事の取得(GET)」「記事の更新(PUT)」「記事の削除(DELETE)」の3つのHTTPメソッドを処理し、
-//Prisma ORMを使ってデータベースのpostとその関連カテゴリー情報を操作する。
 
-
-
+//Prismaクライアントを生成
 const prisma = new PrismaClient();
 
-// include に一致する Prisma の戻り型
-//このAPIで使うinclude内容に厳密する戻り型をPrismaから自動生成。
+// include戻り型&DTO変換
+// このAPIで使うincludeで取得する戻り値の型をPrismaから自動生成。
 type PostWithCategories = Prisma.PostGetPayload<{
   include: {
     postCategories: {
@@ -39,17 +48,18 @@ type PostWithCategories = Prisma.PostGetPayload<{
   };
 }>;
 
-// DB -> DTO（Date→ISO文字列）変換
-//DBの生データ（Date 型を含む）を、クライアント向け DTO（日時は string）に変換。
+//DB生データ -> 画面用DTOへ変換
+// Date → ISO文字列 に変換して、フロントでそのまま扱いやすく
+// DBの生データ（Date 型を含む）を、クライアント向け DTO（日時は string）に変換。
 const toPostDTO = (row: PostWithCategories): PostDTO => ({
   id: row.id,
   title: row.title,
   content: row.content,
-  thumbnailUrl: row.thumbnailUrl,
+  thumbnailImageKey: row.thumbnailImageKey,
   postCategories: row.postCategories.map(pc => ({
     category: { id: pc.category.id, name: pc.category.name },
   })),
-  //日時はstringで
+  //日時はstringに指定して変換
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
@@ -57,12 +67,19 @@ const toPostDTO = (row: PostWithCategories): PostDTO => ({
 
 // 管理者　個別記事取得API(GET)
 // ---- GET /api/admin/posts/:id ----
-//指定した記事IDに該当する記事＋カテゴリーを取得
+//GET(個別取得)
+// GETリクエストの時にこの関数が呼ばれる
+// 指定した記事IDに該当する記事＋カテゴリーを取得
+
+//App Router の HTTPメソッド関数。
+// URL の id を { params } 経由で受け取る。
 export const GET = async (
   req: NextRequest,
   { params }: { params: { id: string } }
 ) => {
-  // ★ 認証ガード
+  //認証ガード
+  // 未ログインなら即リターン
+  // このAPIは認証必須
   const auth = await requireUser(req);
   if ("error" in auth) return NextResponse.json(auth, { status: auth.status });
   // 任意のロール制御
@@ -71,21 +88,20 @@ export const GET = async (
 
   //URLのidを数値化&妥当性チェック。
   const postId = Number(params.id);
+  //isIntegerで値が整数かどうかを判定
   if (!Number.isInteger(postId)) {
     //整数でなければ400を返す。
     return NextResponse.json<ApiError>({ status: "Invalid id" }, { status: 400 });
   }
 
   //指定IDの記事を1件取得。
-  //カテゴリーは中間テーブル postCategories 経由で category(id,name) を取得。
+  // Prismaのincludeを使用し、対象記事を一度のクエリで関連カテゴリまで取得。
+  // カテゴリーは中間テーブル postCategories 経由で category(id,name) を取得。
   try {
     //パスパラメータから記事IDを取得し、postテーブルから該当記事を取得。
     const post = await prisma.post.findUnique({
-      where: {
-        id: postId
-      },
+      where: { id: postId },
       //中間テーブルpostCategoriesを通じて、関連カテゴリー(category.id,name)も取得。
-      //Prismaのincludeを使用し、関連データを1回のクエリで取得可能に。
       include: {
         postCategories: {
           include: {
@@ -98,7 +114,7 @@ export const GET = async (
       },
     });
     //成功時レスポンス。
-    //DTO に変換して返す（post が無ければ null）。
+    // DTO に変換して返す（post が無ければ null）。
     return NextResponse.json<GetPostResponse>(
       { status: "OK", post: post ? toPostDTO(post as PostWithCategories) : null },
       { status: 200 }
@@ -107,62 +123,60 @@ export const GET = async (
     //例外発生時は、400とエラーメッセージを返す。
     const message = error instanceof Error ? error.message : "Unexpected error";
     //失敗時
-    return NextResponse.json<ApiError>({ status: message }, { status: 400 });
+    return NextResponse.json<ApiError>({ status: message }, { status: 500 });
 
   }
 };
 
 
 
-
-// PUTという命名にすることで、PUTリクエストの時にこの関数が呼ばれる
 //管理者　記事更新API
 // ---- PUT /api/admin/posts/:id ----
-//更新時に送られるリクエストボディの型定義
-//記事の内容を更新し、カテゴリー関連も更新
+//PUT(更新)
+// PUTリクエストの時にこの関数が呼ばれる
+// 更新時に送られるリクエストボディの型定義
+// 記事の内容を更新し、カテゴリー関連も更新
 export const PUT = async (
   req: NextRequest,
   { params }: { params: { id: string } } // ここでリクエストパラメータを受け取る
 ) => {
-  // ★ 認証ガード
+  //認証ガード
   const auth = await requireUser(req);
   if ("error" in auth) return NextResponse.json(auth, { status: auth.status });
   // const gate = assertRole(auth.user, "admin");
   // if ("error" in gate) return NextResponse.json(gate, { status: gate.status });
 
-
-  //idの安全な数値化
-  //idの妥当性チェック
+  //URLのidを数値化&妥当性チェック。
   const postId = Number(params.id);
   if (!Number.isInteger(postId)) {
     return NextResponse.json<ApiError>({ status: "Invalid id" }, { status: 400 });
   }
 
   //Post.ts からimportした型でボディを受け取る
-  //ボディをパースして型付け（title/content/thumbnailUrl と、categories: {id:number}[]）。
-  const { title, content, categories, thumbnailUrl }: UpdatePostRequestBody =
+  // ボディをパースして型付け（title/content/thumbnailImageKey と、categories: {id:number}[]）。
+  const { title, content, categories, thumbnailImageKey }: UpdatePostRequestBody =
     await req.json();
 
+  //post.updateで記事本体の更新(この戻り値は使わない方針)
+  // idを指定して、Postを更新
+  // title, content, thumbnailUrlを更新
   try {
-    // idを指定して、Postを更新
-    //title, content, thumbnailUrlを更新
-    //post.updateで記事本体の更新(この戻り値は使わない方針)
     await prisma.post.update({
       where: { id: postId },
-      data: { title, content, thumbnailUrl },
+      data: { title, content, thumbnailImageKey },
     });
 
-    // 一旦、記事と関連するカテゴリーの中間テーブルのレコードを全て削除
-    //送信されたカテゴリーに合わせて再登録(多対多の関係)
-    //postCategory.deleteManyで中間テーブルのリセット
+    //postCategory.deleteManyで一旦、記事と関連するカテゴリーの中間テーブルのレコードを全て削除
     await prisma.postCategory.deleteMany({
       where: { postId },
     });
 
 
-    // 記事とカテゴリーの中間テーブルのレコードをDBに生成、受けとったカテゴリIDで再登録(多対多の再構築)
-    // 本来複数同時生成には、createManyというメソッドがあるが、sqliteではcreateManyが使えないので、for文1つずつ実施して登録してる
     //for...of＋postCategory.createで中間テーブルの再構築
+    // 記事とカテゴリーの中間テーブルのレコードをDBに生成し、送信、
+    // 受けとったカテゴリIDに合わせて再登録(多対多の関係を再構築)
+    //本来複数同時生成には、createManyというメソッドがあるが、
+    // sqliteではcreateManyが使えないので、for文1つずつ実施して登録してる
     for (const category of categories) {
       await prisma.postCategory.create({
         data: { postId, categoryId: category.id },
@@ -170,6 +184,9 @@ export const PUT = async (
     }
 
     //最終状態をinclude付きで取り直してDTOで返す。
+    // 無ければエラーを返す。
+
+    //最終状態をinclude付きで取り直す。
     const finalRow = await prisma.post.findUnique({
       where: { id: postId },
       include: {
@@ -182,15 +199,20 @@ export const PUT = async (
       return NextResponse.json<ApiError>({ status: "Not Found" }, { status: 404 });
     }
 
-    // レスポンスを返す
     //DTOに変換した最終状態を返す。
+    // フロントがそのまま使える。
     return NextResponse.json<PutPostResponse>(
       { status: "OK", post: toPostDTO(finalRow as PostWithCategories) }, 
       { status: 200 }
     );
+
+  //例外時の共通エラーレスポンス
+    // 既知エラーを細かく分岐表示する。
+    //Prisma 既知エラーの例：
+    // P2025(対象無し) → 404
+    // それ以外の Known → 400
+    // 未知 → 500  
   } catch (error: unknown) {
-    //例外時の共通エラーレスポンス
-    // Prisma 既知エラーの例：対象なし(P2025) → 404
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === "P2025") {
         return NextResponse.json<ApiError>({ status: "Not Found" }, { status: 404 });
@@ -203,31 +225,33 @@ export const PUT = async (
 };
 
 //管理者　記事削除API
-//DELETEという命名にすることで、DELETEリクエストの時にこの関数が呼ばれる
-//指定IDの記事を削除
+//DELETE(削除)
+// DELETEリクエストの時にこの関数が呼ばれる
+// 指定IDの記事を削除
 export const DELETE = async (
   req: NextRequest,
   { params }: { params: { id: string } }
 ) => {
-  // ★ 認証ガード
+  //認証ガード
   const auth = await requireUser(req);
   if ("error" in auth) return NextResponse.json(auth, { status: auth.status });
   // const gate = assertRole(auth.user, "admin");
   // if ("error" in gate) return NextResponse.json(gate, { status: gate.status });
 
-  //idの妥当性チェック
+  //URLのidを数値化&妥当性チェック。
   const postId = Number(params.id);
   if (!Number.isInteger(postId)) {
     return NextResponse.json<ApiError>({ status: "Invalid id" }, { status: 400 });
   }
 
   try {
-    //postテーブルの該当IDのレコードを削除
-    //対象記事を削除して、成功レスポンス。
+    //postテーブルの該当IDのレコードを削除し、
+    // 対象記事を削除
     await prisma.post.delete({ where: { id: postId } });
+    //成功時レスポンス
     return NextResponse.json<DeletePostResponse>({ status: "OK" }, { status: 200 });
   } catch (error: unknown) {
-    //エラーレスポンス
+    //エラー時レスポンス
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
         if (error.code === "P2025") {
           return NextResponse.json<ApiError>({ status: "Not Found" }, { status: 404 });
