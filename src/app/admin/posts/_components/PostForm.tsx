@@ -4,21 +4,43 @@ import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { useForm } from "react-hook-form";
 import { CreatePost, Category } from "@/app/_types/Post";
 import { useApi } from "@/app/_hooks/useApi";
+//画像を保存する為のクラウド
 import { supabase } from "@/utils/supabase";
+//画像のファイル名を重複しない様にするためのID生成
 import { v4 as uuidv4 } from "uuid";
 
+//全体の概要
+//記事の新規作成／編集フォームを表示し、Supabase からカテゴリ一覧取得・画像アップロード＆プレビュー・入力バリデーションを行い、
+// 送信時に CreatePost 形式へ整形して親コンポーネントへ渡す Next.js クライアント用フォームコンポーネント
+
+//イメージ
+//「カテゴリ取得 → 入力＆バリデーション → 画像アップ＆プレビュー → 送信整形」まで、
+// 記事作成に必要な流れを1つのフォームにまとめた部品
+
+//処理の流れ
+//まずサーバーからカテゴリ一覧を読み込み、フォームに選択肢を出します。
+//画像を選ぶと**クラウド(Supabase)**にアップロードされ、プレビューが出ます。
+//タイトル・本文・カテゴリを入力して「送信」を押すと、データをバックエンドが受け取りやすい形（CreatePost）に組み直して渡します。
+//処理中はフォームが自動で無効化され、重複送信を防ぎます。
+
+//Storageバケット名の定数
+//Supabaseの中の「画像を保存する場所(フォルダ)」の名前
 const BUCKET = "post_thumbnail";
 
+//フォームの受け取りprops型
+//このフォームが外から受け取るデータの型
 export type PostFormProps = {
-  initialData: CreatePost;
-  onSubmit: (data: CreatePost) => Promise<void>;
-  onDelete?: () => void;
-  submitLabel: string;
+  initialData: CreatePost;//フォームの初期表示データ(編集時など)
+  onSubmit: (data: CreatePost) => Promise<void>;//フォームが送信されたときの処理
+  onDelete?: () => void;//削除ボタンを押した時の処理
+  submitLabel: string;//ボタンに表示する文字(例:「作成」「更新」)
   isSubmitting?: boolean;
   disabled?: boolean;
 };
 
-// フォーム内部で扱う型（RHF 用）
+// RHF 内部で管理するフォーム値の型
+//このフォームで扱う入力項目
+//タイトル・内容・画像キー・カテゴリー(複数選択)
 type FormValues = {
   title: string;
   content: string;
@@ -26,6 +48,9 @@ type FormValues = {
   categoryIds: number[]; // ← UI では number[] を扱う
 };
 
+//フォームのメインコンポーネント
+//フォーム本体の宣言（props 受け取り）
+//以下より実際のフォーム処理がスタート
 export const PostForm: React.FC<PostFormProps> = ({
   initialData,
   onSubmit,
@@ -35,12 +60,19 @@ export const PostForm: React.FC<PostFormProps> = ({
   disabled: disabledProp,
 }) => {
   // カテゴリ一覧取得（管理API → JWT 自動付与）
-  const { api } = useApi("/api");
+  //サーバーからカテゴリー一覧を取ってくる準備
+  //認証付き API クライアント、カテゴリ一覧＆状態（読み込み中・エラー）
+  const { api } = useApi("/api");//サーバーに安全にアクセスするための共通処理
   const [allCategories, setAllCategories] = useState<Category[]>([]);
-  const [catLoading, setCatLoading] = useState(true);
-  const [catError, setCatError] = useState<string | null>(null);
+  const [catLoading, setCatLoading] = useState(true);//読み込み中かどうか
+  const [catError, setCatError] = useState<string | null>(null);//エラーが起きたらその内容を表示するため
 
-  // RHF 初期化
+  //RHF 初期化
+  //react-hook-formでセットアップしている。
+  // register:各入力欄を登録
+  // handleSubmit:送信ボタンを押した時の処理をまとめる
+  // reset:入力内容をリセットする関数
+  // errors:入力エラーがあるかどうかを管理
   const {
     register,
     handleSubmit,
@@ -48,6 +80,8 @@ export const PostForm: React.FC<PostFormProps> = ({
     setValue,
     watch,
     formState: { isSubmitting, errors },
+  //defaultValuesで初期値を設定
+  //defaultValues に initialData を反映
   } = useForm<FormValues>({
     defaultValues: {
       title: initialData.title,
@@ -58,7 +92,9 @@ export const PostForm: React.FC<PostFormProps> = ({
     mode: "onTouched",
   });
 
-  // initialData が変わったらフォーム値を同期（編集画面の初回ロードなど）
+
+  //initialDataが更新された時にフォーム内容(値)も更新(リセット)する。
+  // 編集ページの初回ロード、編集ページでデータを再取得した時などに反映される。
   useEffect(() => {
     reset({
       title: initialData.title,
@@ -69,6 +105,10 @@ export const PostForm: React.FC<PostFormProps> = ({
   }, [initialData, reset]);
 
   // カテゴリ一覧取得
+  //サーバー(API)からカテゴリー一覧を取得する処理(中断可能)
+  // エラーを画面表示用ステートへ
+  //AbortControllerはページを離れた時に処理を中断するための安全策
+  //取得が成功したらsetAllCategoriesに保存する。
   useEffect(() => {
     const ac = new AbortController();
     (async () => {
@@ -95,7 +135,9 @@ export const PostForm: React.FC<PostFormProps> = ({
     // api.get への参照だけを依存にすると無限ループを避けやすい
   }, [api.get]);
 
-  // プレビュー URL を、フォーム値の thumbnailImageKey から生成
+  //選択した画像を一時的にプレビュー表示するための処理
+  // thumbnailKeyが変わるたびにSupabaseからURLを発行して画像を表示する(プレビュー)。
+  // 署名付きURL をフォーム値の thumbnailImageKey から生成
   const thumbnailKey = watch("thumbnailImageKey");
   const [previewUrl, setPreviewUrl] = useState<string>("");
   useEffect(() => {
@@ -116,7 +158,8 @@ export const PostForm: React.FC<PostFormProps> = ({
     })();
   }, [thumbnailKey]);
 
-  // 画像選択＆アップロード → フォーム値にキーを格納
+  //画像を選ぶと自動的にSupabaseにアップロードされ、その結果のファイルパスをフォームに登録し、プレビューを更新する。
+  //画像選択→Storageへアップロード→フォームにキー保存→プレビュー生成
   const handleImageChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -142,13 +185,17 @@ export const PostForm: React.FC<PostFormProps> = ({
     setPreviewUrl(signed.data?.signedUrl ?? "");
   };
 
-  // 実効的に UI を無効化する条件
+  //送信中や読み込み中はボタンを無効にするための状態。
+  // 「連打による重複送信」などを防ぐ。
+  // 実効的に UI を無効化する条件を集約
   const isBusy = useMemo(
     () => !!disabledProp || isSubmittingProp || isSubmitting || catLoading,
     [disabledProp, isSubmittingProp, isSubmitting, catLoading]
   );
 
-  // 送信（FormValues → CreatePost に変換して親 onSubmit へ）
+  //フォームを送信した時の処理
+  // RHFの送信ハンドラ
+  // 入力内容(FormValues)をCreatePost形式に変換して、親(onSubmit)に渡す。
   const onSubmitRHF = async (values: FormValues) => {
     if (!values.categoryIds || values.categoryIds.length === 0) {
       alert("カテゴリーを選択してください。");
@@ -163,7 +210,11 @@ export const PostForm: React.FC<PostFormProps> = ({
     await onSubmit(payload);
   };
 
+  //フォーム本体。
+
   return (
+    //カテゴリのエラー・ローディング表示、fieldset で一括無効化
+    //handleSubmitはRHFが提供している送信関数
     <form onSubmit={handleSubmit(onSubmitRHF)} className="space-y-4 p-4">
       <h1 className="text-lg font-bold mb-4">記事フォーム</h1>
 
@@ -172,6 +223,7 @@ export const PostForm: React.FC<PostFormProps> = ({
 
       <fieldset disabled={isBusy} className="space-y-4">
         {/* タイトル */}
+        {/*タイトル入力。必須バリデーションあり、エラー表示*/}
         <div>
           <label htmlFor="title" className="block text-sm font-medium text-gray-700">
             タイトル
@@ -187,6 +239,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         </div>
 
         {/* 内容 */}
+        {/*本文入力。必須チェックあり*/}
         <div>
           <label htmlFor="content" className="block text-sm font-medium text-gray-700">
             内容
@@ -202,6 +255,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         </div>
 
         {/* 画像アップロード */}
+        {/*画像選択UI、現在のキー表示、プレビュー*/}
         <div>
           <label htmlFor="thumbnailImageInput" className="block text-sm font-medium text-gray-700">
             サムネイル画像
@@ -229,6 +283,7 @@ export const PostForm: React.FC<PostFormProps> = ({
         </div>
 
         {/* カテゴリー（複数選択） */}
+        {/*複数カテゴリ選択可、1つ以上選ばないとエラー、string[] → number[] へ整形して保存*/}
         <div>
           <label htmlFor="categoryIds" className="block text-sm font-medium text-gray-700">
             カテゴリー（複数選択可）
@@ -262,6 +317,8 @@ export const PostForm: React.FC<PostFormProps> = ({
         </div>
 
         {/* ボタン */}
+        {/*状況に応じてラベル変更・無効化*/}
+        {/*送信ボタン（送信中ラベル切替）と削除ボタン（存在時のみ）*/}
         <div className="flex space-x-4 pt-2">
           <button type="submit" className="py-2 px-4 rounded-lg text-white bg-blue-700">
             {isSubmitting || isSubmittingProp ? "送信中..." : submitLabel}
